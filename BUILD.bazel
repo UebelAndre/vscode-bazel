@@ -267,6 +267,14 @@ vsce_bin.vsce_binary(
     data = [":vsix"] + _VSCE_TOOL_DATA,
 )
 
+# `bazel run //:vsce -- <args>` runs the vsce CLI itself, for commands that
+# need no package, e.g. `VSCE_PAT=... bazel run //:vsce -- verify-pat BazelBuild`
+# (the publish workflow checks the token this way before building).
+vsce_bin.vsce_binary(
+    name = "vsce",
+    data = _VSCE_TOOL_DATA,
+)
+
 # `bazel run //:upload_release_asset -- <tag>` attaches the built .vsix to
 # the GitHub release for <tag>, as the release workflow does.
 github_release_upload(

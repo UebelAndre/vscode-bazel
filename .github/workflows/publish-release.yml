@@ -1,0 +1,115 @@
+name: Publish VS Code extension
+
+# Builds the extension at a release tag and publishes it to the Visual Studio
+# Marketplace. Run it by hand from the Actions tab once release-please has cut
+# the release. Requires the VSCE_PAT repository secret: an Azure DevOps personal
+# access token for the publisher in package.json, scoped to "All accessible
+# organizations" with the "Marketplace > Manage" scope.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and publish, e.g. v0.15.1. Must match the version in package.json at that tag."
+        required: true
+        type: string
+      dry_run:
+        description: "Build the .vsix and verify the Marketplace token, but do not publish."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  # Needed to attach the .vsix to the GitHub release for the tag.
+  contents: write
+
+# Never publish two releases at the same time, and never cancel one midway.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    if: ${{ github.repository == 'bazel-contrib/vscode-bazel' }} # Allow CI-runs only for events from/to this repository
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Checkout ${{ inputs.tag }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag }}
+
+      # The .vsix is versioned from package.json, so the tag has to agree with
+      # it or we would publish a version other than the one asked for.
+      - name: Check that the tag matches package.json
+        run: |
+          version="$(jq -r .version package.json)"
+          publisher="$(jq -r .publisher package.json)"
+          if [[ "$TAG" != "v$version" ]]; then
+            echo "::error::Tag '$TAG' does not match package.json version '$version' (expected tag 'v$version')."
+            exit 1
+          fi
+          echo "PUBLISHER=$publisher" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      # Bazel provides Node.js and all npm dependencies; no npm install needed.
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      # Fail fast on a missing or expired token before spending time on the build.
+      - name: Verify Marketplace token
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [[ -z "$VSCE_PAT" ]]; then
+            echo "::error::The VSCE_PAT repository secret is not set. It must hold a Marketplace token for the $PUBLISHER publisher; see the comment at the top of this workflow."
+            exit 1
+          fi
+          bazel run //:vsce -- verify-pat "$PUBLISHER"
+
+      # Writes vscode-bazel-<version>.vsix into the checkout for the artifact
+      # step below.
+      - name: Package VS Code extension
+        run: bazel run //:export_vsix
+
+      - name: Upload Workflow Artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vscode-bazel-${{ env.VERSION }}.vsix
+          path: vscode-bazel-*.vsix
+          if-no-files-found: error
+
+      - name: Publish to the Visual Studio Marketplace
+        if: ${{ !inputs.dry_run }}
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: bazel run //:publish
+
+      # Keep the GitHub release asset identical to what went to the
+      # Marketplace. release-please normally creates the release; if the tag
+      # has none (for example a manually pushed tag), just say so.
+      - name: Attach .vsix to the GitHub release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            bazel run //:upload_release_asset -- "$TAG"
+          else
+            echo "::notice::No GitHub release exists for '$TAG'; skipping the asset upload."
+          fi
+
+      - name: Summary
+        run: |
+          {
+            echo "## vscode-bazel $VERSION"
+            if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+              echo "Dry run: built and verified, nothing published."
+            else
+              echo "Published to https://marketplace.visualstudio.com/items?itemName=$PUBLISHER.vscode-bazel"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
