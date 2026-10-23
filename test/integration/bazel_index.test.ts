@@ -11,7 +11,12 @@ import * as vscode from "vscode";
 import { BazelQuery } from "../../src/bazel/bazel_query";
 import { QueryLocation } from "../../src/bazel/query_location";
 import { ILogger } from "../../src/extension/logger";
-import { IndexManager, WorkspaceIndex } from "../../src/index";
+import {
+  IndexManager,
+  LabelResolver,
+  WorkspaceIndex,
+  parseLabel,
+} from "../../src/index";
 import { blaze_query } from "../../src/protos";
 
 interface StubHooks {
@@ -118,6 +123,9 @@ describe("index with Bazel in the loop", function (this: Mocha.Suite) {
 
     stub.setWorkspaceFolders([workspace]);
     stub.setConfig("bazel.executable", bazelExecutable);
+    // The startup mapping would start a Bazel server; the first test asserts
+    // that indexing alone never does.
+    stub.setConfig("bazel.index.resolveRepositoriesOnStartup", false);
     stub.setConfig("bazel.commandLine.startupOptions", [
       `--output_base=${outputBase}`,
     ]);
@@ -258,6 +266,122 @@ ${rerun.stdout.slice(-2000)}`,
     assert.ok(
       expectedGenerated.get("pkg3")?.has("data_gen"),
       "fixture should contain a macro-generated target",
+    );
+  });
+
+  it("resolves external repos: fetch, map, rename, second hop", async () => {
+    const resolver = manager.getResolver(workspace);
+    const labels = new LabelResolver(manager, logger);
+    const ctx = await labels.contextFor(path.join(workspace, "pkg3", "BUILD"));
+    assert.ok(ctx, "context for pkg3/BUILD");
+    assert.strictEqual(ctx.canonicalRepo, "");
+    assert.strictEqual(ctx.pkg, "pkg3");
+
+    // Nothing is fetched yet: the canonical name is known from the mapping
+    // but the directory does not exist.
+    const hubBefore = await resolver.resolveRepo("hub", false, "");
+    assert.strictEqual(hubBefore.dir, undefined);
+    assert.strictEqual(hubBefore.missing, "unfetched");
+    assert.match(hubBefore.canonical, /fixture_repos[+~]hub$/);
+    assert.deepStrictEqual(
+      await labels.resolveLabel(
+        parseLabel("@hub//:thing", ctx.pkg)!,
+        ctx,
+        false,
+      ),
+      [],
+    );
+
+    // The main module imports the spoke as `renamed`; its extension-local
+    // name is not visible from here.
+    const unknown = await resolver.resolveRepo("spoke", false, "");
+    assert.strictEqual(unknown.missing, "unknown");
+
+    await resolver.fetchRepo(hubBefore.canonical);
+
+    const defs = await labels.resolveLabel(
+      parseLabel("@hub//:defs.bzl", ctx.pkg)!,
+      ctx,
+      false,
+    );
+    assert.strictEqual(defs.length, 1);
+    assert.match(defs[0].uri.fsPath, /fixture_repos[+~]hub[/\\]defs\.bzl$/);
+
+    const thing = await labels.resolveLabel(
+      parseLabel("@hub//:thing", ctx.pkg)!,
+      ctx,
+      false,
+    );
+    assert.strictEqual(thing.length, 1);
+    assert.strictEqual(thing[0].target?.kind, "alias");
+    assert.strictEqual(thing[0].target?.range.start.line, 2);
+
+    const macro = await labels.resolveLoadedSymbol(
+      "@hub//:defs.bzl",
+      "hub_macro",
+      ctx,
+    );
+    assert.strictEqual(macro[0]?.definition?.kind, "function");
+    assert.strictEqual(
+      macro[0]?.definition?.doc,
+      "Creates a filegroup named `name`.",
+    );
+
+    // Second hop: inside the hub, `@spoke` means the hub's own view of the
+    // mapping, not the main module's.
+    const hubBuild = thing[0].uri.fsPath;
+    const hubCtx = await labels.contextFor(hubBuild);
+    assert.ok(hubCtx, "context for the hub's BUILD file");
+    assert.match(hubCtx.canonicalRepo, /fixture_repos[+~]hub$/);
+    assert.strictEqual(hubCtx.pkg, "");
+
+    const spokeBefore = await resolver.resolveRepo(
+      "spoke",
+      false,
+      hubCtx.canonicalRepo,
+    );
+    assert.strictEqual(spokeBefore.missing, "unfetched");
+    assert.match(spokeBefore.canonical, /fixture_repos[+~]spoke$/);
+
+    // Fetching goes by canonical name: `spoke` is not visible from the main
+    // module and would fail as `--repo=@spoke`.
+    await resolver.fetchRepo(spokeBefore.canonical);
+
+    const spokeThing = await labels.resolveLabel(
+      parseLabel("@spoke//:thing", hubCtx.pkg)!,
+      hubCtx,
+      false,
+    );
+    assert.strictEqual(spokeThing.length, 1);
+    assert.strictEqual(spokeThing[0].target?.kind, "filegroup");
+    assert.match(
+      spokeThing[0].uri.fsPath,
+      /fixture_repos[+~]spoke[/\\]BUILD\.bazel$/,
+    );
+
+    const renamed = await labels.resolveLabel(
+      parseLabel("@renamed//:thing", ctx.pkg)!,
+      ctx,
+      false,
+    );
+    assert.strictEqual(renamed[0]?.uri.fsPath, spokeThing[0].uri.fsPath);
+
+    // The hub's own macro-created target is found through the hub's BUILD.
+    const fromMacro = await labels.resolveLabel(
+      parseLabel("@hub//:from_macro", ctx.pkg)!,
+      ctx,
+      false,
+    );
+    assert.strictEqual(fromMacro[0]?.target?.kind, "hub_macro");
+
+    const fetched = await resolver.listFetchedRepos();
+    assert.ok(
+      fetched.some((n) => /fixture_repos[+~]hub$/.test(n)),
+      `${fetched}`,
+    );
+    assert.ok(
+      fetched.some((n) => /fixture_repos[+~]spoke$/.test(n)),
+      `${fetched}`,
     );
   });
 });

@@ -18,6 +18,8 @@ import * as vscode from "vscode";
 
 import { BazelWorkspaceInfo } from "../bazel/bazel_workspace_info";
 import { getBazelWorkspaceFolder } from "../bazel/bazel_utils";
+import { getResolveRepositoriesOnStartup } from "../extension/configuration";
+import { ExternalRepoResolver } from "./external_repos";
 import { LabelResolver } from "./label_resolver";
 import { ILogger } from "../extension/logger";
 import { affectsRenamedSetting } from "../extension/settings_migration";
@@ -44,6 +46,7 @@ export class IndexManager implements vscode.Disposable {
   private readonly indexes = new Map<string, WorkspaceIndex>();
   /** Roots indexed on demand because they lie in an ignored directory. */
   private readonly derivedRoots = new Set<string>();
+  private readonly resolvers = new Map<string, ExternalRepoResolver>();
   private readonly disposables: vscode.Disposable[] = [];
   private readonly pendingDocuments = new Map<string, NodeJS.Timeout>();
 
@@ -186,6 +189,16 @@ export class IndexManager implements vscode.Disposable {
     return this.getIndexForPath(document.uri.fsPath);
   }
 
+  /** Returns the external repository resolver for a repository root. */
+  public getResolver(root: string): ExternalRepoResolver {
+    let resolver = this.resolvers.get(root);
+    if (!resolver) {
+      resolver = new ExternalRepoResolver(root, this.logger);
+      this.resolvers.set(root, resolver);
+    }
+    return resolver;
+  }
+
   /** Discards all indexes and rebuilds them for the current folders. */
   public rebuildAll() {
     const wanted = new Map<string, vscode.WorkspaceFolder[]>();
@@ -241,6 +254,7 @@ export class IndexManager implements vscode.Disposable {
       root,
       index.onDidChange((change) => this.fire(change)),
     );
+    void index.ready.then(() => this.preloadRepoMapping(root));
     return index;
   }
 
@@ -249,6 +263,29 @@ export class IndexManager implements vscode.Disposable {
     this.indexes.delete(root);
     this.indexListeners.get(root)?.dispose();
     this.indexListeners.delete(root);
+    this.resolvers.delete(root);
+  }
+
+  /**
+   * Asks Bazel once for the main module's repository mapping so that labels
+   * into external repositories resolve, and can be fetched, without a Bazel
+   * invocation at click time. Runs after the index is built, in the
+   * background, and only when enabled.
+   */
+  private preloadRepoMapping(root: string) {
+    if (!getResolveRepositoriesOnStartup() || this.derivedRoots.has(root)) {
+      return;
+    }
+    void this.getResolver(root)
+      .getRepoMapping("")
+      .then((mapping) => {
+        if (mapping) {
+          this.logger.logInfo(
+            `Loaded the repository mapping of ${root} ` +
+              `(${Object.keys(mapping).length} names)`,
+          );
+        }
+      });
   }
 
   /** Publishes a change; resolved names are recomputed lazily. */
@@ -299,6 +336,10 @@ export class IndexManager implements vscode.Disposable {
     ) {
       for (const index of this.indexes.values()) {
         index.invalidateFile(fsPath);
+      }
+      // The visible repositories and their names may have changed.
+      for (const resolver of this.resolvers.values()) {
+        resolver.invalidate();
       }
       const owner = this.indexes.get(path.dirname(fsPath));
       if (name === ".bazelignore") {

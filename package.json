@@ -215,6 +215,18 @@
             },
             {
                 "type": "object",
+                "title": "Workspace Index",
+                "properties": {
+                    "bazel.index.resolveRepositoriesOnStartup": {
+                        "type": "boolean",
+                        "order": 0,
+                        "default": true,
+                        "markdownDescription": "After the workspace has been indexed, run `bazel mod dump_repo_mapping` once in the background to learn how the main module names its external repositories. With this, Ctrl/Cmd+click on `@repo//...` labels resolves (and offers to fetch) without invoking Bazel at click time. Disable to keep Bazel completely out of the picture until you click into an external repository."
+                    }
+                }
+            },
+            {
+                "type": "object",
                 "title": "Buildifier",
                 "properties": {
                     "bazel.buildifier.enable": {

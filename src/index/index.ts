@@ -13,6 +13,7 @@
 // limitations under the License.
 
 export * from "./bindings";
+export * from "./external_repos";
 export * from "./file_models";
 export * from "./index_manager";
 export * from "./label";

@@ -1,1 +1,5 @@
 module(name = "module_workspace")
+
+# Repositories for the extension's own tests; see pkg3/extensions.bzl.
+fixture_repos = use_extension("//pkg3:extensions.bzl", "fixture_repos")
+use_repo(fixture_repos, "hub", renamed = "spoke")
