@@ -56,6 +56,29 @@ export async function openFixture(
   );
 }
 
+/** Labels of the completion items offered at a position. */
+export async function completionLabelsAt(
+  document: vscode.TextDocument,
+  position: vscode.Position,
+): Promise<string[]> {
+  return (await completionItemsAt(document, position)).map((item) =>
+    typeof item.label === "string" ? item.label : item.label.label,
+  );
+}
+
+/** The completion items offered at a position. */
+export async function completionItemsAt(
+  document: vscode.TextDocument,
+  position: vscode.Position,
+): Promise<vscode.CompletionItem[]> {
+  const list = await vscode.commands.executeCommand<vscode.CompletionList>(
+    "vscode.executeCompletionItemProvider",
+    document.uri,
+    position,
+  );
+  return list.items;
+}
+
 /** Finds the position of the first occurrence of `needle` in a document. */
 export function positionOf(
   document: vscode.TextDocument,

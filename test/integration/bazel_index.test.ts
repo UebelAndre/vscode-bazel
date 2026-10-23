@@ -160,6 +160,9 @@ describe("index with Bazel in the loop", function (this: Mocha.Suite) {
     await inner.ready;
     assert.deepStrictEqual(inner.getPackages(), [""]);
     assert.ok(inner.findTarget("", "inner"));
+    const ctx = await manager.labels.contextFor(innerBuild);
+    assert.strictEqual(ctx?.repoRoot, inner.root);
+    assert.strictEqual(ctx?.pkg, "");
   });
 
   it("agrees with bazel query on named targets and locations", async () => {

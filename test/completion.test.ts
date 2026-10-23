@@ -1,156 +1,115 @@
 import * as assert from "assert";
 import * as path from "path";
 import * as vscode from "vscode";
-import { BazelCompletionItemProvider } from "../src/completion-provider/bazel_completion_provider";
-import { BazelQuery, BazelWorkspaceInfo } from "../src/bazel";
-import { blaze_query } from "../src/protos";
-import * as sinon from "sinon";
-import { useFakeTimers } from "./fake_timers";
+import {
+  completionLabelsAt,
+  fixtureWorkspacePath,
+  openFixture,
+  positionOf,
+  readyIndex,
+} from "./index_test_helpers";
 
-describe("BazelCompletionItemProvider", () => {
-  let sandbox: sinon.SinonSandbox;
-  const testWorkspacePath = path.join(
-    __dirname,
-    "..",
-    "..",
-    "test",
-    "bazel_workspace",
-  );
+describe("StarlarkCompletionProvider", function (this: Mocha.Suite) {
+  this.timeout(20000);
 
-  beforeEach(() => {
-    sandbox = sinon.createSandbox();
+  before(async () => {
+    await readyIndex();
   });
 
   afterEach(async () => {
-    sandbox.restore();
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     await vscode.workspace
       .getConfiguration("bazel.workspace")
       .update("path", undefined, vscode.ConfigurationTarget.Workspace);
   });
 
-  it("should return completion items filtered by workspace", async () => {
-    const provider = new BazelCompletionItemProvider();
+  it("completes targets of a package after ':'", async () => {
+    const document = await openFixture("pkg1", "BUILD");
+    // `deps=["//pkg1"]` — place the cursor right after the quote and type.
+    const editor = await vscode.window.showTextDocument(document);
+    const insertAt = positionOf(
+      document,
+      'deps=["//pkg1"]',
+      'deps=["//pkg1'.length,
+    );
+    await editor.edit((edit) => edit.insert(insertAt, ":"));
 
-    // Populate targetsMap manually for testing provideCompletionItems
-    const workspacePath1 = "/path/to/workspace1";
-    const workspacePath2 = "/path/to/workspace2";
+    const labels = await completionLabelsAt(document, insertAt.translate(0, 1));
 
-    (provider as any).targetsMap.set(workspacePath1, [
-      "//pkg1:target1",
-      "//pkg1:target2",
-      "//pkg2:target3",
-    ]);
-    (provider as any).targetsMap.set(workspacePath2, [
-      "//other_pkg:other_target",
-    ]);
-
-    // Stub BazelWorkspaceInfo.fromDocument
-    const mockWorkspaceInfo = {
-      bazelWorkspacePath: workspacePath1,
-    } as BazelWorkspaceInfo;
-    sandbox.stub(BazelWorkspaceInfo, "fromDocument").returns(mockWorkspaceInfo);
-
-    // Mock vscode.TextDocument
-    const mockDocument = {
-      lineAt: (pos: vscode.Position) => ({
-        text: '    srcs = ["//pkg1:',
-      }),
-    } as any as vscode.TextDocument;
-
-    const position = new vscode.Position(0, 20);
-
-    const results = provider.provideCompletionItems(mockDocument, position);
-
-    assert.ok(results);
-    assert.strictEqual(results.length, 2);
-
-    // We expect completion items with folder/file label names
-    const labels = results.map((item) => item.label);
-    assert.ok(labels.includes("target1"));
-    assert.ok(labels.includes("target2"));
+    assert.ok(labels.includes("main"), `expected main in ${labels}`);
+    assert.ok(labels.includes("src_files"), `expected src_files in ${labels}`);
+    assert.ok(labels.includes("foo"), `expected foo in ${labels}`);
   });
 
-  it("uses the pinned root cache in a nested module", async () => {
+  it("completes sub-packages after '//'", async () => {
+    const document = await openFixture("pkg1", "BUILD");
+    const editor = await vscode.window.showTextDocument(document);
+    const insertAt = positionOf(document, 'deps=["//pkg1"]', 'deps=["'.length);
+    // Turn `//pkg1` into `//pkg2/pkg1` so the cursor sits after `//pkg2/`.
+    await editor.edit((edit) => edit.insert(insertAt, "//pkg2/"));
+
+    const labels = await completionLabelsAt(
+      document,
+      insertAt.translate(0, "//pkg2/".length),
+    );
+
+    assert.ok(labels.includes("sub-pkg"), `expected sub-pkg in ${labels}`);
+  });
+
+  it("completes top-level packages", async () => {
+    const document = await openFixture("pkg1", "BUILD");
+    const position = positionOf(
+      document,
+      'deps=["//pkg1"]',
+      'deps=["//'.length,
+    );
+
+    const labels = await completionLabelsAt(document, position);
+
+    for (const expected of ["pkg1", "pkg2", "pkg3", "buildifier"]) {
+      assert.ok(labels.includes(expected), `expected ${expected} in ${labels}`);
+    }
+  });
+
+  it("completes files of the current package for bare strings", async () => {
+    const document = await openFixture("pkg1", "BUILD");
+    const position = positionOf(document, 'srcs=["main.py"]', 'srcs=["'.length);
+
+    const labels = await completionLabelsAt(document, position);
+
+    assert.ok(labels.includes("main.py"), `expected main.py in ${labels}`);
+    assert.ok(labels.includes("subfolder"), `expected subfolder in ${labels}`);
+    // Targets of the package are offered too (inserted as `:name`).
+    assert.ok(labels.includes("src_files"), `expected src_files in ${labels}`);
+  });
+
+  it("uses the pinned root in a nested module", async () => {
     await vscode.workspace
       .getConfiguration("bazel.workspace")
-      .update("path", testWorkspacePath, vscode.ConfigurationTarget.Workspace);
+      .update(
+        "path",
+        fixtureWorkspacePath,
+        vscode.ConfigurationTarget.Workspace,
+      );
+    const index = await readyIndex();
+    assert.strictEqual(index.root, fixtureWorkspacePath);
 
-    const nestedDocumentUri = vscode.Uri.file(
-      path.join(testWorkspacePath, "nested_module", "BUILD"),
+    const document = await openFixture("nested_module", "BUILD");
+    const editor = await vscode.window.showTextDocument(document);
+    await editor.edit((edit) =>
+      edit.insert(
+        new vscode.Position(0, 0),
+        'filegroup(name = "x", srcs = ["//pkg1:"])\n',
+      ),
     );
-    const workspaceFolder =
-      vscode.workspace.getWorkspaceFolder(nestedDocumentUri);
-    assert.ok(workspaceFolder);
-    const staticallyResolvedWorkspace =
-      BazelWorkspaceInfo.fromWorkspaceFolder(workspaceFolder);
-    assert.ok(staticallyResolvedWorkspace);
+    const position = positionOf(document, '"//pkg1:"', '"//pkg1:'.length);
 
-    const provider = new BazelCompletionItemProvider();
-    (provider as any).targetsMap.set(
-      staticallyResolvedWorkspace.bazelWorkspacePath,
-      ["//pkg1:target1", "//pkg1:target2"],
-    );
-    const nestedDocument = {
-      uri: nestedDocumentUri,
-      lineAt: () => ({ text: '    srcs = ["//pkg1:' }),
-    } as unknown as vscode.TextDocument;
+    const labels = await completionLabelsAt(document, position);
 
-    const results = provider.provideCompletionItems(
-      nestedDocument,
-      new vscode.Position(0, 20),
-    );
-
-    assert.deepStrictEqual(
-      results.map((item) => item.label),
-      ["target1", "target2"],
-    );
+    assert.ok(labels.includes("main"), `expected main in ${labels}`);
     assert.strictEqual(
-      BazelWorkspaceInfo.fromDocument(nestedDocument)?.bazelWorkspacePath,
-      staticallyResolvedWorkspace.bazelWorkspacePath,
+      path.relative(fixtureWorkspacePath, document.uri.fsPath),
+      path.join("nested_module", "BUILD"),
     );
-  });
-
-  describe("scheduleRefresh", () => {
-    let clock: sinon.SinonFakeTimers;
-    const buildFileUri = vscode.Uri.file(path.join(testWorkspacePath, "BUILD"));
-
-    beforeEach(() => {
-      clock = useFakeTimers(sandbox);
-    });
-
-    it("runs one query for a burst of BUILD file changes", async () => {
-      const queryStub = sandbox
-        .stub(BazelQuery.prototype, "queryTargets")
-        .resolves(blaze_query.QueryResult.create());
-      const provider = new BazelCompletionItemProvider();
-
-      for (let i = 0; i < 1000; i++) {
-        provider.scheduleRefresh(buildFileUri);
-      }
-      await clock.tickAsync(1000);
-
-      sinon.assert.calledOnceWithMatch(queryStub, "kind('.* rule', ...)");
-      provider.dispose();
-    });
-
-    it("aborts the query in flight on dispose", async () => {
-      let signal: AbortSignal | undefined;
-      sandbox
-        .stub(BazelQuery.prototype, "queryTargets")
-        .callsFake((_query, options) => {
-          signal = options?.abortSignal;
-          return new Promise(() => {
-            /* never settles */
-          });
-        });
-      const provider = new BazelCompletionItemProvider();
-
-      provider.scheduleRefresh(buildFileUri);
-      await clock.tickAsync(1000);
-      assert.strictEqual(signal?.aborted, false);
-
-      provider.dispose();
-      assert.strictEqual(signal?.aborted, true);
-    });
   });
 });
