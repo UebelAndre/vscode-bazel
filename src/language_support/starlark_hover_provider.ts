@@ -60,21 +60,22 @@ export class StarlarkHoverProvider implements vscode.HoverProvider {
         node.load && node.loadSymbol
           ? { load: node.load, symbol: node.loadSymbol }
           : loadBinding(analyzed.module, name);
-      if (!bound) {
-        return undefined;
-      }
-      const [found] = await this.resolver.resolveLoadedSymbol(
-        bound.load.module.value,
-        bound.symbol.original,
-        ctx,
-      );
-      if (!found?.definition) {
-        return undefined;
-      }
+      const [found] = bound
+        ? await this.resolver.resolveLoadedSymbol(
+            bound.load.module.value,
+            bound.symbol.original,
+            ctx,
+          )
+        : [];
+      // Names without a load() may still have a schema: MODULE.bazel
+      // builtins and extension proxies.
       const schema = await this.resolver.schemas.schemaFor(
         name,
         document.uri.fsPath,
       );
+      if (!found?.definition && !schema) {
+        return undefined;
+      }
       return new vscode.Hover(
         definitionMarkdown(name, found, schema, ctx.index.root),
         new vscode.Range(
@@ -129,11 +130,11 @@ export class StarlarkHoverProvider implements vscode.HoverProvider {
 
 function definitionMarkdown(
   name: string,
-  location: ResolvedLocation,
+  location: ResolvedLocation | undefined,
   schema: CallableSchema | undefined,
   root: string,
 ): vscode.MarkdownString {
-  const def = location.definition as BzlDefinition;
+  const def = location?.definition as BzlDefinition | undefined;
   const md = new vscode.MarkdownString();
   md.isTrusted = false;
   let signature: string;
@@ -145,12 +146,12 @@ function definitionMarkdown(
     signature = `${schema.kind === "macro" ? "def " : ""}${name}(${shown}${more}${kwargs})`;
   } else {
     signature =
-      def.kind === "function"
+      def?.kind === "function"
         ? `def ${name}(...)`
-        : `${name} = ${def.kind}(...)`;
+        : `${name} = ${def?.kind}(...)`;
   }
   md.appendCodeblock(signature, "starlark");
-  const text = (schema?.doc ?? def.doc)?.trim();
+  const text = (schema?.doc ?? def?.doc)?.trim();
   if (text) {
     md.appendMarkdown(
       (text.length > MAX_DOC_LENGTH
@@ -158,7 +159,11 @@ function definitionMarkdown(
         : text) + "\n\n",
     );
   }
-  md.appendMarkdown(fileLink(location, root));
+  if (location) {
+    md.appendMarkdown(fileLink(location, root));
+  } else if (schema?.file === "") {
+    md.appendMarkdown("Built into Bazel");
+  }
   return md;
 }
 

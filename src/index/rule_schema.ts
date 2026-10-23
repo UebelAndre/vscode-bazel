@@ -37,6 +37,7 @@ import {
 } from "../starlark";
 import { Binding, BindingResolver, ModuleLoader } from "./bindings";
 import { BzlFileModel, boolLiteral, findKeyword } from "./file_models";
+import { MODULE_BUILTINS, isModuleFile } from "./module_builtins";
 
 /** One attribute (or macro parameter) a callable accepts. */
 export interface AttrSchema {
@@ -324,7 +325,8 @@ export class SchemaResolver {
     }
     const binding = await this.bindings.bindingFor(bare, file);
     if (!binding) {
-      return undefined;
+      // `bazel_dep(...)` and friends have no Starlark definition to read.
+      return isModuleFile(file) ? MODULE_BUILTINS.get(bare) : undefined;
     }
     const scope: Scope = { file: binding.file, model: binding.model };
     if (binding.stmt.kind === "def") {
@@ -335,6 +337,14 @@ export class SchemaResolver {
       return undefined;
     }
     const callee = calleeName(value.func);
+    if (callee === "use_repo_rule") {
+      // `my_repo = use_repo_rule("//:repo.bzl", "my_repo")`: the proxy is
+      // called like the repository rule itself.
+      const target = await this.proxiedDefinition(value, binding.file, depth);
+      return target
+        ? this.computeSchema(target.name, target.file, depth + 1)
+        : undefined;
+    }
     const kind = callee ? RULE_CALLEES.get(callee) : undefined;
     if (!kind) {
       return undefined;
@@ -342,7 +352,10 @@ export class SchemaResolver {
     return this.ruleSchema(name, value, kind, scope, depth);
   }
 
-  /** Schema of `base.member(...)`: a function field of a struct. */
+  /**
+   * Schema of `base.member(...)`: a tag class of the module extension that
+   * `base = use_extension(...)` refers to, or a function field of a struct.
+   */
   private async memberSchema(
     base: string,
     member: string,
@@ -355,6 +368,51 @@ export class SchemaResolver {
     }
     const value = binding.stmt.value;
     const scope: Scope = { file: binding.file, model: binding.model };
+    if (value.kind === "call" && calleeName(value.func) === "use_extension") {
+      const extension = await this.proxiedDefinition(
+        value,
+        binding.file,
+        depth,
+      );
+      if (!extension) {
+        return undefined;
+      }
+      const extBinding = await this.bindings.bindingFor(
+        extension.name,
+        extension.file,
+      );
+      const extCall =
+        extBinding?.stmt.kind === "assign" &&
+        extBinding.stmt.value.kind === "call" &&
+        calleeName(extBinding.stmt.value.func) === "module_extension"
+          ? extBinding.stmt.value
+          : undefined;
+      const tagClassesExpr = extCall && findKeyword(extCall, "tag_classes");
+      if (!extBinding || !tagClassesExpr) {
+        return undefined;
+      }
+      const extScope: Scope = {
+        file: extBinding.file,
+        model: extBinding.model,
+      };
+      const tagClasses = await this.evalExpr(
+        tagClassesExpr,
+        extScope,
+        depth + 1,
+      );
+      const tag =
+        tagClasses.kind === "dict" ? tagClasses.entries.get(member) : undefined;
+      if (tag?.kind !== "tagClass") {
+        return undefined;
+      }
+      return this.ruleSchema(
+        member,
+        tag.call,
+        "tag_class",
+        tag.scope,
+        depth + 1,
+      );
+    }
     const object = await this.evalExpr(value, scope, depth + 1);
     const field = await this.structField(object, member, depth + 1);
     if (field.kind === "function") {
@@ -364,6 +422,34 @@ export class SchemaResolver {
         : undefined;
     }
     return undefined;
+  }
+
+  /**
+   * For `use_extension(label, "name")` and `use_repo_rule(label, "name")`,
+   * the file the label resolves to and the name within it.
+   */
+  private async proxiedDefinition(
+    call: CallExpr,
+    file: string,
+    depth: number,
+  ): Promise<{ file: string; name: string } | undefined> {
+    // `use_extension(extension_bzl_file, extension_name)`, by position or
+    // by keyword, and `use_repo_rule(repo_rule_bzl_file, repo_rule_name)`,
+    // whose parameters are positional-only.
+    const positional = call.args.filter((a) => !a.name && !a.star);
+    const labelArg =
+      call.args.find((a) => a.name?.endsWith("_bzl_file")) ?? positional[0];
+    const nameArg =
+      call.args.find((a) => a.name?.endsWith("_name")) ?? positional[1];
+    if (
+      depth > MAX_DEPTH ||
+      labelArg?.value.kind !== "string" ||
+      nameArg?.value.kind !== "string"
+    ) {
+      return undefined;
+    }
+    const target = await this.loader.resolveModule(labelArg.value.value, file);
+    return target ? { file: target, name: nameArg.value.value } : undefined;
   }
 
   /** Schema of a `rule(...)`, `tag_class(...)` or similar call. */

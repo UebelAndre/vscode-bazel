@@ -411,6 +411,67 @@ describe("SchemaResolver", () => {
     });
   });
 
+  describe("MODULE.bazel", () => {
+    const MODULE = path.join(ROOT, "MODULE.bazel");
+
+    it("resolves tag classes of a module extension proxy", async () => {
+      const schema = await resolver.schemaFor("requirements.parse", MODULE);
+      assert.ok(schema, "expected a tag class schema");
+      assert.strictEqual(schema.kind, "tag_class");
+      assert.strictEqual(
+        schema.doc,
+        "Parses a requirements lock file into a hub repository.",
+      );
+      assert.deepStrictEqual(names(schema), [
+        "name",
+        "requirements_lock",
+        "extra_pip_args",
+      ]);
+      assert.strictEqual(
+        schema.attrs.find((a) => a.name === "name")!.mandatory,
+        true,
+      );
+      // A tag class written inline in the tag_classes dict.
+      const annotate = await resolver.schemaFor(
+        "requirements.annotate",
+        MODULE,
+      );
+      assert.deepStrictEqual(names(annotate), ["package", "copts"]);
+    });
+
+    it("resolves a use_repo_rule proxy to the repository rule", async () => {
+      const schema = await resolver.schemaFor("vendored_repo", MODULE);
+      assert.strictEqual(schema?.kind, "repository_rule");
+      assert.deepStrictEqual(names(schema), ["value"]);
+      assert.ok(schema!.attrs.some((a) => a.name === "name" && a.implicit));
+    });
+
+    it("knows the parameters of the MODULE.bazel builtins", async () => {
+      // Star parameters are not offered; `**kwargs` makes the call open.
+      const useRepo = await resolver.schemaFor("use_repo", MODULE);
+      assert.deepStrictEqual(
+        useRepo!.attrs.map((a) => a.name),
+        ["extension_proxy"],
+      );
+      assert.strictEqual(useRepo!.openEnded, true);
+      const dep = await resolver.schemaFor("bazel_dep", MODULE);
+      assert.deepStrictEqual(
+        dep!.attrs.map((a) => a.name),
+        [
+          "name",
+          "version",
+          "max_compatibility_level",
+          "repo_name",
+          "dev_dependency",
+        ],
+      );
+      assert.strictEqual(
+        await resolver.schemaFor("bazel_dep", RULES),
+        undefined,
+      );
+    });
+  });
+
   it("returns nothing for names it cannot resolve", async () => {
     assert.strictEqual(
       await resolver.schemaFor("cc_library", BUILD),
