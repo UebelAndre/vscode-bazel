@@ -25,11 +25,19 @@ import {
   getQueryOutputBase,
 } from "../extension/configuration";
 
-const protoOutputOptions = [
-  "--proto:output_rule_attrs=''",
-  "--noproto:rule_inputs_and_outputs",
-  "--noproto:default_values",
-];
+/**
+ * Options for `--output=proto` that keep the output small.
+ *
+ * @param ruleAttributes Rule attributes to include; by default none (the
+ * quotes are passed literally, naming an attribute that cannot exist).
+ */
+function protoOutputOptions(ruleAttributes: string[] = []): string[] {
+  return [
+    `--proto:output_rule_attrs=${ruleAttributes.join(",") || "''"}`,
+    "--noproto:rule_inputs_and_outputs",
+    "--noproto:default_values",
+  ];
+}
 
 function getRuleName(target: blaze_query.ITarget): string {
   return target.rule?.name ?? "";
@@ -49,6 +57,8 @@ export class BazelQuery extends BazelCommand {
    * be sorted by their name.
    * @param options.ignoresErrors `true` if errors from executing the query
    * should be ignored.
+   * @param options.ruleAttributes Names of rule attributes to include in the
+   * output; none by default.
    * @returns A {@link QueryResult} object that contains structured information
    * about the query results.
    */
@@ -59,15 +69,22 @@ export class BazelQuery extends BazelCommand {
       sortByRuleName = false,
       ignoresErrors = false,
       abortSignal,
+      ruleAttributes,
     }: {
       additionalOptions?: string[];
       sortByRuleName?: boolean;
       ignoresErrors?: boolean;
       abortSignal?: AbortSignal;
+      ruleAttributes?: string[];
     } = {},
   ): Promise<blaze_query.QueryResult> {
     const buffer = await this.run(
-      [query, ...additionalOptions, "--output=proto", ...protoOutputOptions],
+      [
+        query,
+        ...additionalOptions,
+        "--output=proto",
+        ...protoOutputOptions(ruleAttributes),
+      ],
       { ignoresErrors, abortSignal },
     );
     const result = blaze_query.QueryResult.decode(buffer);

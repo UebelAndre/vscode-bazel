@@ -172,7 +172,7 @@
                     "bazel.commandLine.queryExpression": {
                         "type": "string",
                         "default": "...:*",
-                        "description": "A [query language expression](https://bazel.build/query/language) which determines the packages and targets displayed in the workspace tree and quick picker. The default inspects the entire workspace, but you could narrow it. For example: `//part/you/want/...:*` or `kind('.*_test rule', //...)`"
+                        "markdownDescription": "A [query language expression](https://bazel.build/query/language) which determines the packages and targets offered by the quick picker and queried for macro-generated targets. The default inspects the entire workspace, but you could narrow it. For example: `//part/you/want/...:*` or `kind('.*_test rule', //...)`. The workspace tree is built by parsing `BUILD` files rather than by querying; it honors the subtree form (`//part/you/want/...`) of this setting but ignores other query functions."
                     },
                     "bazel.commandLine.queriesShareServer": {
                         "type": "boolean",
@@ -197,7 +197,7 @@
                         "type": "boolean",
                         "order": 1,
                         "default": true,
-                        "markdownDescription": "Whether to add a CodeLens to `BUILD`/`BUILD.bazel` files to provide actions while browsing the file. Deactivate to avoid running queries in the background."
+                        "markdownDescription": "Whether to add a CodeLens to `BUILD`/`BUILD.bazel` files to provide actions while browsing the file."
                     }
                 }
             },
@@ -209,7 +209,7 @@
                         "type": "boolean",
                         "order": 1,
                         "default": true,
-                        "markdownDescription": "Whether to show Bazel packages and targets in a tree view in the Explorer panel. Deactivate to avoid running queries in the background."
+                        "markdownDescription": "Whether to show Bazel packages and targets in a tree view in the Explorer panel."
                     }
                 }
             },
@@ -677,6 +677,7 @@
         "lint-fix": "bazel run //:lint_fix",
         "test:grammar": "bazel test //:grammar",
         "test:integration": "bazel test //test:integration",
+        "test:index-integration": "bazel test //test:index_integration",
         "test": "bazel test //...",
         "package": "bazel run //:export_vsix",
         "update-snapshot": "bazel run //test:update_snapshot",

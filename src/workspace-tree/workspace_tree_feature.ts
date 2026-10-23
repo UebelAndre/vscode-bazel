@@ -8,6 +8,7 @@ import {
 } from "../bazel/bazel_availability";
 import { BazelWorkspaceTreeProvider } from "./workspace_tree_provider";
 import { Resources } from "../extension/resources";
+import { IndexManager } from "../index";
 
 /**
  * WorkspaceTree feature for Bazel BUILD files.
@@ -30,10 +31,17 @@ export class WorkspaceTreeFeature extends BaseExtensionFeature {
       return Promise.resolve(false);
     }
 
+    const manager = IndexManager.get();
+    if (!manager) {
+      this.logError("Workspace index is not available");
+      return Promise.resolve(false);
+    }
+
     // Create and register the WorkspaceTree provider
     this.workspaceTreeProvider = new BazelWorkspaceTreeProvider(
       Resources.fromExtensionContext(context),
       this.getLogger(),
+      manager,
     );
     this.disposables.push(this.workspaceTreeProvider);
 
@@ -64,12 +72,11 @@ export class WorkspaceTreeFeature extends BaseExtensionFeature {
     );
     this.disposables.push(refreshCommand);
 
-    // Register command to manually refresh the build targets
+    // Register command to manually refresh the build targets: rebuilds the
+    // index, which refreshes the tree when it completes.
     const refreshTargetsCommand = vscode.commands.registerCommand(
       "bazel.refreshBazelBuildTargets",
-      () => {
-        this.workspaceTreeProvider!.refresh();
-      },
+      () => manager.refreshAll(),
     );
     this.disposables.push(refreshTargetsCommand);
 
