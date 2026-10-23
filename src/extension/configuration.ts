@@ -158,6 +158,14 @@ export function getResolveRepositoriesOnStartup(): boolean {
   );
 }
 
+/** How macro-generated targets are discovered; see package.json. */
+export type MacroTargetsMode = "off" | "openFiles" | "workspace";
+
+export function getMacroTargetsMode(): MacroTargetsMode {
+  const value = getRenamedSetting<string>("bazel.index", "macroTargets");
+  return value === "openFiles" || value === "workspace" ? value : "off";
+}
+
 /** Whether to warn about repository rules without a commit or checksum. */
 export function getUnpinnedRepositoryWarnings(): boolean {
   return (

@@ -235,7 +235,10 @@ export class BazelQuery extends BazelCommand {
       child.on("close", (code: number | null) => {
         cleanup();
 
-        if (code === 0 || ignoresErrors) {
+        // With --keep_going, Bazel reports what it could evaluate and
+        // exits with 3; that partial result is worth having.
+        const partial = code === 3 && execArgs.includes("--keep_going");
+        if (code === 0 || partial || ignoresErrors) {
           resolve(Buffer.concat(chunks));
         } else {
           const errorMessage = `Bazel query failed with code ${code}.`;

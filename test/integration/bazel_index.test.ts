@@ -14,6 +14,7 @@ import { ILogger } from "../../src/extension/logger";
 import {
   IndexManager,
   LabelResolver,
+  MacroTargetOverlay,
   WorkspaceIndex,
   parseLabel,
 } from "../../src/index";
@@ -267,6 +268,59 @@ ${rerun.stdout.slice(-2000)}`,
       expectedGenerated.get("pkg3")?.has("data_gen"),
       "fixture should contain a macro-generated target",
     );
+  });
+
+  it("adds macro-generated targets when the overlay runs", async () => {
+    const overlay = new MacroTargetOverlay(manager, logger);
+    try {
+      await overlay.refresh(index);
+    } finally {
+      overlay.dispose();
+    }
+    const targets = index.getTargets("pkg3");
+    const generated = targets.find((t) => t.name === "data_gen");
+    const primary = targets.find((t) => t.name === "data");
+    assert.ok(generated?.generated, "data_gen should be discovered");
+    assert.ok(primary, "data should still be present");
+    assert.strictEqual(generated.generated.generatorFunction, "my_macro");
+    assert.strictEqual(generated.generated.generatorName, "data");
+    assert.strictEqual(generated.kind, "filegroup");
+    assert.strictEqual(generated.file, primary.file);
+    assert.strictEqual(generated.range.start.line, primary.range.start.line);
+    assert.strictEqual(
+      targets.filter((t) => t.name === "data").length,
+      1,
+      "named targets must not be duplicated by the overlay",
+    );
+    index.setGeneratedTargets(new Map());
+    assert.ok(!index.findTarget("pkg3", "data_gen"));
+  });
+
+  it("queries a single package only when it calls macros", async () => {
+    const overlay = new MacroTargetOverlay(manager, logger);
+    try {
+      // pkg1 uses native rules only: no query, nothing generated.
+      const queriedPkg1 = await overlay.refreshPackage(
+        index,
+        "pkg1",
+        path.join(workspace, "pkg1", "BUILD"),
+      );
+      assert.strictEqual(queriedPkg1, false);
+      assert.ok(!index.getTargets("pkg1").some((t) => t.generated));
+
+      // pkg3 calls `my_macro`, a def: queried, and the generated target
+      // appears without touching other packages.
+      const queriedPkg3 = await overlay.refreshPackage(
+        index,
+        "pkg3",
+        path.join(workspace, "pkg3", "BUILD"),
+      );
+      assert.strictEqual(queriedPkg3, true);
+      assert.ok(index.findTarget("pkg3", "data_gen")?.generated);
+    } finally {
+      overlay.dispose();
+      index.setGeneratedTargets(new Map());
+    }
   });
 
   it("resolves external repos: fetch, map, rename, second hop", async () => {

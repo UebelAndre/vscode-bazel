@@ -21,7 +21,7 @@ import {
   BazelWorkspaceTreeProvider,
   WorkspaceTreeFeature,
 } from "../workspace-tree";
-import { IndexManager } from "../index";
+import { IndexManager, MacroTargetOverlay } from "../index";
 import { resolveLabelToLocation } from "../language_support/starlark_definition_provider";
 import { activateCommandVariables } from "./command_variables";
 import { TestExplorerFeature } from "../test-explorer";
@@ -89,7 +89,8 @@ export async function activate(context: vscode.ExtensionContext) {
     logError: (m, show, ...args) => logError(`[Index] ${m}`, show, ...args),
   };
   const indexManager = new IndexManager(indexLogger);
-  context.subscriptions.push(indexManager);
+  const macroTargets = new MacroTargetOverlay(indexManager, indexLogger);
+  context.subscriptions.push(macroTargets, indexManager);
 
   // WorkspaceTreeFeature
   const workspaceTreeFeature = await WorkspaceTreeFeature.create(context);
