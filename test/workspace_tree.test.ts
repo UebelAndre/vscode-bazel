@@ -103,6 +103,11 @@ describe("Bazel Workspace Tree", function (this: Mocha.Suite) {
             ":foobar  (filegroup)": {},
           },
         },
+        "//pkg3": {
+          ":custom_test  (my_test)": {},
+          ":data  (filegroup)": {},
+          ":data_gen  (filegroup)": {},
+        },
       },
       await workspaceTreeProvider.getChildren(),
     );
@@ -130,6 +135,11 @@ describe("Bazel Workspace Tree", function (this: Mocha.Suite) {
           "sub-pkg": {
             ":foobar  (filegroup)": {},
           },
+        },
+        "//pkg3": {
+          ":custom_test  (my_test)": {},
+          ":data  (filegroup)": {},
+          ":data_gen  (filegroup)": {},
         },
         ":bar  (filegroup)": {},
       },
@@ -185,6 +195,10 @@ describe("Bazel Workspace Tree", function (this: Mocha.Suite) {
           },
           "//pkg2/sub-pkg": {
             ":foobar  (filegroup)": {},
+          },
+          "//pkg3": {
+            ":data  (filegroup)": {},
+            ":data_gen  (filegroup)": {},
           },
         },
         await workspaceTreeProvider.getChildren(),

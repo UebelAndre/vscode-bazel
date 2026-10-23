@@ -1,12 +1,9 @@
 import * as vscode from "vscode";
 
 import { BaseExtensionFeature } from "../extension/extension_feature";
-import {
-  BUILD_FILE_CHANGE_DELAY_MS,
-  CoalescingRunner,
-} from "../extension/coalescing_runner";
 import { checkBazelIsAvailable } from "../bazel/bazel_availability";
 import { CodeLensProvider } from "./code_lens_provider";
+import { IndexManager } from "../index";
 
 /**
  * CodeLens feature for Bazel BUILD files.
@@ -27,34 +24,21 @@ export class CodeLensFeature extends BaseExtensionFeature {
       return Promise.resolve(false);
     }
 
+    const manager = IndexManager.get();
+    if (!manager) {
+      this.logError("Workspace index is not available");
+      return Promise.resolve(false);
+    }
+
     // Create and register the CodeLens provider
-    const codelensProvider = new CodeLensProvider(this.getLogger());
-
-    // Set up file watcher for BUILD files
-    const buildWatcher = vscode.workspace.createFileSystemWatcher(
-      "**/{BUILD,BUILD.bazel}",
-      true, // ignoreCreateEvents
-      false,
-      true, // ignoreDeleteEvents
-    );
-
-    // Fire refresh when BUILD files change, coalescing bursts of changes
-    // (e.g. git checkout): each refresh re-queries every visible BUILD file.
-    const refreshRunner = new CoalescingRunner(BUILD_FILE_CHANGE_DELAY_MS, () =>
-      codelensProvider.refresh(),
-    );
-    buildWatcher.onDidChange(
-      () => refreshRunner.schedule(),
-      this,
-      this.disposables,
-    );
+    const codelensProvider = new CodeLensProvider(manager, this.getLogger());
 
     const codeLensRegistration = vscode.languages.registerCodeLensProvider(
       [{ pattern: "**/BUILD" }, { pattern: "**/BUILD.bazel" }],
       codelensProvider,
     );
 
-    this.disposables.push(codeLensRegistration, buildWatcher, refreshRunner);
+    this.disposables.push(codeLensRegistration);
 
     return Promise.resolve(true);
   }

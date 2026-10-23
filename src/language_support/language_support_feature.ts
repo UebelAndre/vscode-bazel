@@ -18,7 +18,8 @@ import * as lc from "vscode-languageclient/node";
 import { BaseExtensionFeature } from "../extension/extension_feature";
 import { BazelCompletionItemProvider } from "../completion-provider";
 import { BazelGotoDefinitionProvider } from "../definition/bazel_goto_definition_provider";
-import { BazelTargetSymbolProvider } from "../symbols";
+import { StarlarkSymbolProvider } from "./starlark_symbol_provider";
+import { IndexManager } from "../index";
 import {
   startLspClientFromCurrentConfig,
   startWasmLspClients,
@@ -277,9 +278,19 @@ export class LanguageSupportFeature extends BaseExtensionFeature {
         ":",
       );
 
+    const manager = IndexManager.get();
+    if (!manager) {
+      this.logError("Workspace index is not available");
+      return false;
+    }
     const symbolRegistration = vscode.languages.registerDocumentSymbolProvider(
-      [{ pattern: "**/BUILD" }, { pattern: "**/BUILD.bazel" }],
-      new BazelTargetSymbolProvider(),
+      [
+        { scheme: "file", language: "starlark" },
+        { scheme: "file", pattern: "**/BUILD" },
+        { scheme: "file", pattern: "**/BUILD.bazel" },
+        { scheme: "file", pattern: "**/*.bzl" },
+      ],
+      new StarlarkSymbolProvider(manager),
     );
 
     const definitionRegistration = vscode.languages.registerDefinitionProvider(

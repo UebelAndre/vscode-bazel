@@ -1,87 +1,106 @@
-// test/code_lens_provider.test.ts
-import * as vscode from "vscode";
 import * as assert from "assert";
 import * as sinon from "sinon";
-import * as bazelUtils from "../src/bazel/bazel_utils";
+import * as vscode from "vscode";
 import { CodeLensProvider } from "../src/codelens/code_lens_provider";
-import { BazelWorkspaceInfo } from "../src/bazel";
-import { CodeLensBuilder } from "../src/codelens/code_lens_builder";
-import { blaze_query } from "../src/protos";
+import {
+  CodeLensBuilder,
+  CodeLensTarget,
+} from "../src/codelens/code_lens_builder";
+import { BazelWorkspaceInfo } from "../src/bazel/bazel_workspace_info";
+import { BuildFileModel, IndexedTarget } from "../src/index";
 
 describe("CodeLensProvider", () => {
-  let provider: CodeLensProvider;
   let sandbox: sinon.SinonSandbox;
-  let mockDocument: vscode.TextDocument;
-  let mockWorkspaceInfo: BazelWorkspaceInfo;
-  let mockCodeLensBuilder: {
-    buildCodeLenses: sinon.SinonStub;
-  };
-  let mockLogger: {
+  let buildCodeLenses: sinon.SinonStub;
+  let logger: {
     logDebug: sinon.SinonStub;
     logInfo: sinon.SinonStub;
     logWarn: sinon.SinonStub;
     logError: sinon.SinonStub;
   };
 
-  // Helper function to create test document
+  const buildFile = "/workspace/path/to/BUILD";
+
   function createTestDocument(overrides: Partial<vscode.TextDocument> = {}) {
     return {
       isDirty: false,
+      version: 1,
       uri: {
-        fsPath: "/workspace/path/to/BUILD",
+        fsPath: buildFile,
         scheme: "file",
-        toString: () => "file:///workspace/path/to/BUILD",
+        toString: () => `file://${buildFile}`,
       } as vscode.Uri,
-      fileName: "/workspace/path/to/BUILD",
+      fileName: buildFile,
       lineCount: 10,
-      getText: () => 'cc_binary(name = "test")',
+      getText: () => 'cc_binary(name = "test")\ncc_test(name = "t")',
       ...overrides,
     } as unknown as vscode.TextDocument;
   }
 
-  // Helper function to create workspace info
-  function createWorkspaceInfo(overrides: Partial<BazelWorkspaceInfo> = {}) {
+  function createWorkspaceInfo() {
     return {
       bazelWorkspacePath: "/workspace",
-      workspacePath: "/workspace",
-      bazelExecutable: "bazel",
       workspaceFolder: {
         uri: vscode.Uri.file("/workspace"),
         name: "workspace",
         index: 0,
       },
-      ...overrides,
     } as unknown as BazelWorkspaceInfo;
   }
 
-  // Setup common stubs before each test
+  function position(line: number) {
+    return { line, character: 0 };
+  }
+
+  function target(name: string, kind: string, line: number): IndexedTarget {
+    return {
+      label: `//path/to:${name}`,
+      name,
+      pkg: "path/to",
+      kind,
+      file: buildFile,
+      range: { start: position(line), end: position(line) },
+      nameRange: { start: position(line), end: position(line) },
+    };
+  }
+
+  /** A stand-in for the workspace index holding one package. */
+  function fakeManager(targets: IndexedTarget[]) {
+    const model: BuildFileModel = {
+      file: buildFile,
+      pkg: "path/to",
+      loads: [],
+      targets,
+      calls: [],
+      errorCount: 0,
+    };
+    const index = {
+      root: "/workspace",
+      ready: Promise.resolve(),
+      syncDocument: sinon
+        .stub()
+        .returns({ pkg: "path/to", file: buildFile, model }),
+      getTargets: () => targets,
+      getPackage: () => ({ pkg: "path/to", file: buildFile, model }),
+      getBzlModel: (): undefined => undefined,
+    };
+    return {
+      index,
+      manager: { getIndexForDocument: () => index } as any,
+    };
+  }
+
   beforeEach(() => {
     sandbox = sinon.createSandbox();
-
-    // Create default test document and workspace info
-    mockDocument = createTestDocument();
-    mockWorkspaceInfo = createWorkspaceInfo();
-
-    // Create a mock logger
-    mockLogger = {
+    logger = {
       logDebug: sandbox.stub(),
       logInfo: sandbox.stub(),
       logWarn: sandbox.stub(),
       logError: sandbox.stub(),
     };
-
-    // Create a mock builder
-    mockCodeLensBuilder = {
-      buildCodeLenses: sandbox.stub().returns([]),
-    };
-
-    // Stub the CodeLensBuilder class to return our mock instance
-    sandbox
+    buildCodeLenses = sandbox
       .stub(CodeLensBuilder.prototype, "buildCodeLenses")
-      .callsFake(mockCodeLensBuilder.buildCodeLenses as any);
-
-    // Create the provider after common stubs are in place
-    provider = new CodeLensProvider(mockLogger);
+      .returns([]);
   });
 
   afterEach(() => {
@@ -89,77 +108,57 @@ describe("CodeLensProvider", () => {
   });
 
   describe("provideCodeLenses", () => {
-    it("returns empty array when document is dirty", async () => {
-      const dirtyDoc = { ...mockDocument, isDirty: true };
-      const result = await provider.provideCodeLenses(dirtyDoc);
-      assert.strictEqual(result.length, 0);
-    });
-
     it("returns empty array when not in a Bazel workspace", async () => {
       sandbox.stub(BazelWorkspaceInfo, "fromDocument").returns(undefined);
-      const result = await provider.provideCodeLenses(mockDocument);
+      const { manager } = fakeManager([]);
+      const provider = new CodeLensProvider(manager, logger);
+      const result = await provider.provideCodeLenses(createTestDocument());
       assert.strictEqual(result.length, 0);
+      sinon.assert.notCalled(buildCodeLenses);
     });
 
-    it("propagates parameters correctly", async () => {
-      sandbox
-        .stub(BazelWorkspaceInfo, "fromDocument")
-        .returns(mockWorkspaceInfo);
+    it("builds lenses from the indexed targets of the document", async () => {
+      const workspaceInfo = createWorkspaceInfo();
+      sandbox.stub(BazelWorkspaceInfo, "fromDocument").returns(workspaceInfo);
+      const { manager, index } = fakeManager([
+        target("test", "cc_binary", 0),
+        target("t", "cc_test", 1),
+      ]);
+      const provider = new CodeLensProvider(manager, logger);
+      const document = createTestDocument();
 
-      const mockTargets = blaze_query.QueryResult.create({
-        target: [
-          {
-            type: blaze_query.Target.Discriminator.RULE,
-            rule: {
-              name: "test",
-              ruleClass: "cc_binary",
-              location: "/workspace/path/to/BUILD:1:1",
-            },
-          },
-        ],
-      });
+      await provider.provideCodeLenses(document);
 
-      const getTargetsStub = sandbox
-        .stub(bazelUtils, "getTargetsForBuildFile")
-        .resolves(mockTargets);
-
-      await provider.provideCodeLenses(mockDocument);
-
-      sinon.assert.calledWith(
-        getTargetsStub,
-        "bazel",
-        "/workspace",
-        "/workspace/path/to/BUILD",
-      );
-      sinon.assert.calledWith(
-        mockCodeLensBuilder.buildCodeLenses,
-        mockWorkspaceInfo,
-        mockTargets,
-      );
+      sinon.assert.calledWith(index.syncDocument, document);
+      sinon.assert.calledOnce(buildCodeLenses);
+      const [info, targets] = buildCodeLenses.firstCall.args as [
+        BazelWorkspaceInfo,
+        CodeLensTarget[],
+      ];
+      assert.strictEqual(info, workspaceInfo);
+      assert.deepStrictEqual(targets, [
+        { label: "//path/to:test", line: 0, isTest: false, isExecutable: true },
+        { label: "//path/to:t", line: 1, isTest: true, isExecutable: true },
+      ]);
     });
 
-    it("handles errors from getTargetsForBuildFile", async () => {
+    it("still provides lenses for dirty documents", async () => {
       sandbox
         .stub(BazelWorkspaceInfo, "fromDocument")
-        .returns(mockWorkspaceInfo);
-      const error = new Error("Bazel error");
-      sandbox.stub(bazelUtils, "getTargetsForBuildFile").rejects(error);
+        .returns(createWorkspaceInfo());
+      const { manager } = fakeManager([target("test", "cc_binary", 0)]);
+      const provider = new CodeLensProvider(manager, logger);
 
-      const result = await provider.provideCodeLenses(mockDocument);
-      assert.strictEqual(result.length, 0);
+      await provider.provideCodeLenses(createTestDocument({ isDirty: true }));
 
-      // Verify logger was called with the error
-      sinon.assert.calledWith(
-        mockLogger.logError,
-        "Error getting targets for build file:",
-        false,
-        error,
-      );
+      sinon.assert.calledOnce(buildCodeLenses);
     });
   });
 
   describe("refresh", () => {
     it("triggers onDidChangeCodeLenses event", (done) => {
+      const { manager } = fakeManager([]);
+      const provider = new CodeLensProvider(manager, logger);
       provider.onDidChangeCodeLenses(() => {
         done();
       });
