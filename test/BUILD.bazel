@@ -63,6 +63,8 @@ js_library(
     srcs = glob([
         "*.js",
         "*.ts",
+        "integration/*.js",
+        "integration/*.ts",
         "lcov/*.md",
     ]),
     visibility = ["//:__pkg__"],
@@ -129,7 +131,10 @@ _NODE_TESTS = [
 ts_project(
     name = "tsc",
     srcs = glob(
-        ["*.ts"],
+        [
+            "*.ts",
+            "integration/*.test.ts",
+        ],
         exclude = _NODE_TESTS,
     ),
     allow_js = True,
@@ -268,4 +273,41 @@ mocha_bin.mocha_test(
         "//:node_modules",
     ],
     tags = ["requires-network"],
+)
+
+# Bazel-in-the-loop tests for the workspace index (parity with bazel query,
+# the macro-generated target overlay, external repository resolution).
+# They run under plain node with a stub of the VS Code API, copy the fixture
+# workspace to a temporary directory and drive the host's bazel there, so
+# they need neither a display nor the sandbox.
+js_library(
+    name = "index_integration_support",
+    srcs = [
+        "integration/hook_vscode.js",
+        "integration/vscode_stub.js",
+    ],
+)
+
+mocha_bin.mocha_test(
+    name = "index_integration",
+    size = "large",
+    args = [
+        "--require",
+        "test/integration/hook_vscode.js",
+        "--timeout",
+        "900000",
+        "test/integration/bazel_index.test.js",
+    ],
+    data = [
+        ":bazel_workspace_fixture_lib",
+        ":index_integration_support",
+        ":tsc",
+        "//:node_modules",
+        "//:protos_lib",
+        "//:tsc",
+    ],
+    tags = [
+        "no-sandbox",
+        "requires-network",
+    ],
 )

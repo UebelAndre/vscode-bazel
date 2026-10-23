@@ -13,9 +13,9 @@
 // limitations under the License.
 
 import * as vscode from "vscode";
-import { BazelWorkspaceInfo, QueryLocation } from "../bazel";
+import { BazelWorkspaceInfo } from "../bazel";
 import { IBazelCommandAdapter, IBazelCommandOptions } from "../bazel";
-import { blaze_query } from "../protos";
+import { IndexedTarget, RuleInfo, toVsRange } from "../index";
 import { IBazelTreeItem } from "./bazel_tree_item";
 import { getBazelRuleIcon } from "./icons";
 import { Resources } from "../extension/resources";
@@ -25,20 +25,20 @@ export class BazelTargetTreeItem
   implements IBazelCommandAdapter, IBazelTreeItem
 {
   /**
-   * Initializes a new tree item with the given query result representing a
-   * build target.
+   * Initializes a new tree item for a build target.
    *
    * @param resources The resources for the extension.
    * @param workspaceInfo The workspace information.
    * @param parent The parent tree item of this item.
-   * @param target An object representing a build target that was produced by a
-   * query.
+   * @param target The indexed target.
+   * @param info What is known about the target's rule.
    */
   constructor(
     private readonly resources: Resources,
     private readonly workspaceInfo: BazelWorkspaceInfo,
     private readonly parent: IBazelTreeItem,
-    private readonly target: blaze_query.ITarget,
+    public readonly target: IndexedTarget,
+    private readonly info: RuleInfo,
   ) {}
 
   public mightHaveChildren(): boolean {
@@ -58,14 +58,11 @@ export class BazelTargetTreeItem
   }
 
   public getLabel(): string {
-    const fullPath = this.target.rule?.name ?? "";
-    const colonIndex = fullPath.lastIndexOf(":");
-    const targetName = fullPath.substr(colonIndex);
-    return `${targetName}  (${this.target.rule?.ruleClass ?? "unknown"})`;
+    return `:${this.target.name}  (${this.target.kind})`;
   }
 
   public getIcon(): string | vscode.ThemeIcon {
-    const bazelRuleIcon = getBazelRuleIcon(this.target);
+    const bazelRuleIcon = getBazelRuleIcon(this.target.kind);
     if (bazelRuleIcon) {
       return this.resources.getIconPath(bazelRuleIcon);
     }
@@ -73,18 +70,14 @@ export class BazelTargetTreeItem
   }
 
   public getTooltip(): string {
-    return `${this.target.rule?.name ?? ""}`;
+    return this.target.label;
   }
 
   public getCommand(): vscode.Command | undefined {
-    if (!this.target.rule?.location) {
-      return undefined;
-    }
-    const location = new QueryLocation(this.target.rule.location);
     return {
       arguments: [
-        vscode.Uri.file(location.path),
-        { selection: location.range },
+        vscode.Uri.file(this.target.file),
+        { selection: toVsRange(this.target.nameRange) },
       ],
       command: "vscode.open",
       title: "Go to Build Target",
@@ -92,20 +85,13 @@ export class BazelTargetTreeItem
   }
 
   public getContextValue(): string {
-    const ruleClass = this.target.rule?.ruleClass;
-    if (
-      ruleClass &&
-      (ruleClass.endsWith("_test") || ruleClass === "test_suite")
-    ) {
-      return "testRule";
-    }
-    return "rule";
+    return this.info.isTest ? "testRule" : "rule";
   }
 
   public getBazelCommandOptions(): IBazelCommandOptions {
     return {
       options: [],
-      targets: this.target.rule?.name ? [this.target.rule.name] : [],
+      targets: [this.target.label],
       workspaceInfo: this.workspaceInfo,
     };
   }

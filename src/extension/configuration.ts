@@ -97,6 +97,29 @@ export function getQueryExpression(): string {
 }
 
 /**
+ * Derives a package prefix from `bazel.commandLine.queryExpression` so that
+ * the index-backed tree can honor the common case of narrowing the tree to
+ * a subtree, e.g. `//part/you/want/...:*`.
+ *
+ * @returns The package path prefix (without `//`), or undefined when the
+ * expression covers the whole workspace or cannot be interpreted as a plain
+ * subtree, in which case no filtering is applied.
+ */
+export function getIndexScopePrefix(): string | undefined {
+  const expression = getQueryExpression().trim();
+  // `//pkg/...`, optionally as `@//` or `@@//`, with an optional `:*`,
+  // `:all` or `:all-targets` suffix.
+  const match =
+    /^(?:@@?)?\/\/([^:\s@]*?)\/?\.\.\.(?::\*|:all|:all-targets)?$/.exec(
+      expression,
+    );
+  if (!match) {
+    return undefined;
+  }
+  return match[1] === "" ? undefined : match[1];
+}
+
+/**
  * Whether queries should share the same Bazel server as builds, as specified
  * by the workspace configuration.
  */

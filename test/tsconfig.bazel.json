@@ -5,5 +5,5 @@
         "rootDir": ".",
         "outDir": "."
     },
-    "include": ["*.ts"]
+    "include": ["*.ts", "integration/*.ts"]
 }
