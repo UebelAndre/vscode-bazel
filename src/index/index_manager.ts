@@ -288,9 +288,23 @@ export class IndexManager implements vscode.Disposable {
       });
   }
 
-  /** Publishes a change; resolved names are recomputed lazily. */
+  /**
+   * Publishes a change. Schemas asked from the changed BUILD files are
+   * forgotten, since their `load()`s may have changed; `.bzl` changes clear
+   * everything through {@link invalidateStarlark}.
+   */
   private fire(change: IndexChange) {
-    this.labels.bindings.clear();
+    const index = this.indexes.get(change.root);
+    if (!change.pkgs || !index) {
+      this.labels.schemas.clear();
+    } else {
+      for (const pkg of change.pkgs) {
+        const file = index.getPackage(pkg)?.file;
+        if (file) {
+          this.labels.schemas.clear(file);
+        }
+      }
+    }
     this.onDidChangeEmitter.fire(change);
   }
 
@@ -398,6 +412,7 @@ export class IndexManager implements vscode.Disposable {
         }
         if (isBuildFileName(name)) {
           this.getIndexForPath(fsPath)?.syncDocument(document);
+          this.labels.schemas.clear(fsPath);
         } else {
           this.invalidateStarlark(fsPath);
         }
@@ -419,12 +434,12 @@ export class IndexManager implements vscode.Disposable {
     }
   }
 
-  /** Drops cached parses and resolved names after a `.bzl` file changed. */
+  /** Drops cached parses, names and schemas after a `.bzl` file changed. */
   private invalidateStarlark(fsPath: string) {
     for (const index of this.indexes.values()) {
       index.invalidateFile(fsPath);
     }
-    this.labels.bindings.clear();
+    this.labels.schemas.clear();
   }
 }
 

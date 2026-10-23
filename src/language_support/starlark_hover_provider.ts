@@ -17,6 +17,7 @@ import * as vscode from "vscode";
 
 import {
   BzlDefinition,
+  CallableSchema,
   IndexManager,
   LabelResolver,
   ResolvedLocation,
@@ -24,6 +25,7 @@ import {
   parseLabel,
   shortLabel,
 } from "../index";
+import { offeredAttrs } from "./schema_support";
 import { DocumentCache } from "./starlark_definition_provider";
 import { loadBinding, nodeAt } from "./document_analysis";
 
@@ -69,8 +71,12 @@ export class StarlarkHoverProvider implements vscode.HoverProvider {
       if (!found?.definition) {
         return undefined;
       }
+      const schema = await this.resolver.schemas.schemaFor(
+        name,
+        document.uri.fsPath,
+      );
       return new vscode.Hover(
-        definitionMarkdown(name, found, ctx.index.root),
+        definitionMarkdown(name, found, schema, ctx.index.root),
         new vscode.Range(
           document.positionAt(node.ident.start),
           document.positionAt(node.ident.end),
@@ -124,16 +130,27 @@ export class StarlarkHoverProvider implements vscode.HoverProvider {
 function definitionMarkdown(
   name: string,
   location: ResolvedLocation,
+  schema: CallableSchema | undefined,
   root: string,
 ): vscode.MarkdownString {
   const def = location.definition as BzlDefinition;
   const md = new vscode.MarkdownString();
   md.isTrusted = false;
-  md.appendCodeblock(
-    def.kind === "function" ? `def ${name}(...)` : `${name} = ${def.kind}(...)`,
-    "starlark",
-  );
-  const text = def.doc?.trim();
+  let signature: string;
+  if (schema) {
+    const attrs = offeredAttrs(schema).map((a) => a.name);
+    const shown = attrs.slice(0, 8).join(", ");
+    const more = attrs.length > 8 ? ", …" : "";
+    const kwargs = schema.openEnded ? ", **kwargs" : "";
+    signature = `${schema.kind === "macro" ? "def " : ""}${name}(${shown}${more}${kwargs})`;
+  } else {
+    signature =
+      def.kind === "function"
+        ? `def ${name}(...)`
+        : `${name} = ${def.kind}(...)`;
+  }
+  md.appendCodeblock(signature, "starlark");
+  const text = (schema?.doc ?? def.doc)?.trim();
   if (text) {
     md.appendMarkdown(
       (text.length > MAX_DOC_LENGTH
