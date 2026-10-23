@@ -79,15 +79,18 @@ export class CodeLensProvider implements vscode.CodeLensProvider {
     if (!entry) {
       return [];
     }
-    const targets: CodeLensTarget[] = index.getTargets(entry.pkg).map((t) => {
-      const info = ruleInfoFor(t);
-      return {
-        label: t.label,
-        line: t.range.start.line,
-        isTest: info.isTest,
-        isExecutable: info.isExecutable,
-      };
-    });
+    const schemas = this.manager.labels.schemas;
+    const targets: CodeLensTarget[] = await Promise.all(
+      index.getTargets(entry.pkg).map(async (t) => {
+        const info = await ruleInfoFor(schemas, t);
+        return {
+          label: t.label,
+          line: t.range.start.line,
+          isTest: info.isTest,
+          isExecutable: info.isExecutable,
+        };
+      }),
+    );
 
     const codeLenses = this.builder.buildCodeLenses(workspaceInfo, targets);
     this.logger.logDebug(

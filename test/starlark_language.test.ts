@@ -239,7 +239,92 @@ describe("Starlark language features", function (this: Mocha.Suite) {
     });
   });
 
-  describe("load completion", () => {
+  describe("keyword completion", () => {
+    it("offers attributes of a rule defined through re-exports", async () => {
+      const document = await openFixture("pkg3", "BUILD");
+      const editor = await vscode.window.showTextDocument(document);
+      // Inside `vendored_binary(` after the existing arguments.
+      const anchor = positionOf(
+        document,
+        '    srcs = ["data.txt"],\n)',
+        '    srcs = ["data.txt"],\n'.length,
+      );
+      await editor.edit((edit) => edit.insert(anchor, "    \n"));
+      const items = await completionItemsAt(document, anchor.translate(0, 4));
+      const labels = items.map((i) =>
+        typeof i.label === "string" ? i.label : i.label.label,
+      );
+      for (const expected of [
+        "deps",
+        "edition",
+        "linker_script",
+        "out_binary",
+        "visibility",
+        "args",
+      ]) {
+        assert.ok(
+          labels.includes(expected),
+          `expected ${expected} in ${labels}`,
+        );
+      }
+      // Already supplied and private attributes are not offered.
+      assert.ok(!labels.includes("name"), "name is already set");
+      assert.ok(!labels.includes("srcs"), "srcs is already set");
+      assert.ok(
+        !labels.includes("_process_wrapper"),
+        "private attrs are hidden",
+      );
+      const deps = items.find((i) => i.label === "deps")!;
+      assert.strictEqual(deps.detail, "label_list");
+      assert.ok(
+        (deps.documentation as vscode.MarkdownString).value.includes(
+          "List of other libraries to be linked to this library target.",
+        ),
+      );
+      assert.strictEqual(
+        (deps.insertText as vscode.SnippetString).value,
+        "deps = $0",
+      );
+    });
+
+    it("offers struct fields after a dot", async () => {
+      const document = await openFixture("pkg3", "vendored_rules.bzl");
+      const editor = await vscode.window.showTextDocument(document);
+      const end = document.lineAt(document.lineCount - 1).range.end;
+      await editor.edit((edit) => edit.insert(end, "\nx = vendored_common."));
+      const items = await completionItemsAt(
+        document,
+        document.lineAt(document.lineCount - 1).range.end,
+      );
+      const labels = items.map((i) =>
+        typeof i.label === "string" ? i.label : i.label.label,
+      );
+      assert.deepStrictEqual(labels, [
+        "crate_info",
+        "create_crate_info",
+        "default_version",
+      ]);
+      assert.strictEqual(
+        items.find((i) => i.label === "create_crate_info")!.kind,
+        vscode.CompletionItemKind.Function,
+      );
+    });
+
+    it("offers provider fields across re-exports", async () => {
+      const document = await openFixture("pkg3", "vendored_defs.bzl");
+      const editor = await vscode.window.showTextDocument(document);
+      const end = document.lineAt(document.lineCount - 1).range.end;
+      await editor.edit((edit) => edit.insert(end, "\nx = VendoredInfo."));
+      const items = await completionItemsAt(
+        document,
+        document.lineAt(document.lineCount - 1).range.end,
+      );
+      const labels = items.map((i) =>
+        typeof i.label === "string" ? i.label : i.label.label,
+      );
+      assert.deepStrictEqual(labels, ["aliases", "name", "root"]);
+    });
+
     it("offers .bzl files and exported symbols inside load()", async () => {
       const document = await openFixture("pkg3", "BUILD");
       const editor = await vscode.window.showTextDocument(document);
@@ -261,6 +346,36 @@ describe("Starlark language features", function (this: Mocha.Suite) {
         typeof i.label === "string" ? i.label : i.label.label,
       );
       assert.deepStrictEqual(labels.sort(), ["my_macro", "my_test"]);
+    });
+
+    it("shows signature help for a rule call", async () => {
+      const document = await openFixture("pkg3", "BUILD");
+      const help = await vscode.commands.executeCommand<vscode.SignatureHelp>(
+        "vscode.executeSignatureHelpProvider",
+        document.uri,
+        positionOf(
+          document,
+          '    srcs = ["data.txt"],',
+          '    srcs = ["'.length,
+        ),
+      );
+      assert.ok(help, "expected signature help");
+      const signature = help.signatures[help.activeSignature];
+      assert.ok(
+        signature.label.startsWith("vendored_binary("),
+        signature.label,
+      );
+      const parameters = signature.parameters.map((p) =>
+        typeof p.label === "string"
+          ? p.label
+          : signature.label.slice(p.label[0], p.label[1]),
+      );
+      assert.strictEqual(parameters[help.activeParameter], "srcs");
+      assert.ok(
+        (signature.documentation as vscode.MarkdownString).value.includes(
+          "Builds a vendored binary crate.",
+        ),
+      );
     });
   });
 

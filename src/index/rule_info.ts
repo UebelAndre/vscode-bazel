@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { IndexedTarget } from "./file_models";
+import { SchemaResolver } from "./rule_schema";
 
 /** What the index knows about the rule or macro behind a target. */
 export interface RuleInfo {
@@ -73,10 +74,28 @@ export function heuristicRuleInfo(kind: string): RuleInfo {
 }
 
 /**
- * Classifies a target. Rule definitions are not consulted yet; an explicit
- * `executable = True` (e.g. on a genrule) is honoured.
+ * Classifies a target by the `rule()` definition behind it when that can be
+ * found through the BUILD file's `load()` statements. Otherwise (native
+ * rules, unresolvable macros, generated targets) the naming heuristics
+ * apply, honouring an explicit `executable = True` such as on a genrule.
  */
-export function ruleInfoFor(target: IndexedTarget): RuleInfo {
+export async function ruleInfoFor(
+  schemas: SchemaResolver,
+  target: IndexedTarget,
+): Promise<RuleInfo> {
+  if (!target.generated) {
+    const schema = await schemas.schemaFor(target.kind, target.file);
+    // Rules declare their flags; macros inherit them from the rule they
+    // forward to. A flag the evaluator could not read leaves the heuristics
+    // in charge.
+    if (schema?.test !== undefined && schema.executable !== undefined) {
+      return {
+        kind: target.kind,
+        isTest: schema.test,
+        isExecutable: schema.executable || schema.test,
+      };
+    }
+  }
   const info = heuristicRuleInfo(target.kind);
   if (target.executable === undefined) {
     return info;

@@ -106,8 +106,10 @@ describe("Bazel Workspace Tree", function (this: Mocha.Suite) {
           },
         },
         "//pkg3": {
+          ":cc_vendored_test  (vendored_cc_test)": {},
           ":custom_test  (my_test)": {},
           ":data  (my_macro)": {},
+          ":vendored  (vendored_binary)": {},
         },
       },
       await workspaceTreeProvider.getChildren(),
@@ -141,8 +143,10 @@ describe("Bazel Workspace Tree", function (this: Mocha.Suite) {
           },
         },
         "//pkg3": {
+          ":cc_vendored_test  (vendored_cc_test)": {},
           ":custom_test  (my_test)": {},
           ":data  (my_macro)": {},
+          ":vendored  (vendored_binary)": {},
         },
         ":bar  (filegroup)": {},
       },

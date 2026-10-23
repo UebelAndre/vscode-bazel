@@ -20,17 +20,30 @@ import {
   FileContext,
   IndexManager,
   LabelResolver,
+  SchemaResolver,
   WorkspaceIndex,
   findBuildFile,
   isBuildFileName,
 } from "../index";
-import { LoadContext, insideString, loadContextAt } from "./document_analysis";
+import {
+  LoadContext,
+  callContextAt,
+  insideString,
+  loadContextAt,
+  memberAccessAt,
+} from "./document_analysis";
+import { attrMarkdown, offeredAttrs } from "./schema_support";
+import { DocumentCache } from "./starlark_definition_provider";
 
 /**
- * Completion of labels inside string literals: repository names after `@`,
- * packages after `//`, targets after `:`, files or targets of the current
- * package for bare strings, and `.bzl` files and exported symbols inside
- * `load()`. Fetched external repositories are browsed from their files.
+ * Completion for Starlark files.
+ *
+ * Inside string literals: labels, i.e. repository names after `@`, packages
+ * after `//`, targets after `:`, files or targets of the current package
+ * for bare strings, and `.bzl` files and exported symbols inside `load()`.
+ * Fetched external repositories are browsed from their files. Outside
+ * strings: keyword arguments of the rule or macro being called, and fields
+ * after `struct.` or `Provider.`.
  */
 export class StarlarkCompletionProvider
   implements vscode.CompletionItemProvider
@@ -38,6 +51,8 @@ export class StarlarkCompletionProvider
   constructor(
     private readonly manager: IndexManager,
     private readonly resolver: LabelResolver,
+    private readonly schemas: SchemaResolver,
+    private readonly documents: DocumentCache,
   ) {}
 
   public async provideCompletionItems(
@@ -47,7 +62,7 @@ export class StarlarkCompletionProvider
     const text = document.getText();
     const offset = document.offsetAt(position);
     if (!insideString(text, offset)) {
-      return [];
+      return this.completeCode(document, text, offset, position);
     }
     const line = document.lineAt(position).text;
     const before = line.slice(0, position.character);
@@ -107,6 +122,87 @@ export class StarlarkCompletionProvider
       }
       items.push(item);
     }
+    return items;
+  }
+
+  /** Keyword-argument and member completion outside of strings. */
+  private async completeCode(
+    document: vscode.TextDocument,
+    text: string,
+    offset: number,
+    position: vscode.Position,
+  ): Promise<vscode.CompletionItem[]> {
+    const file = document.uri.fsPath;
+
+    const member = memberAccessAt(text, offset);
+    if (member) {
+      const members = await this.schemas.membersFor(member.path, file);
+      if (!members) {
+        return [];
+      }
+      const memberRange = new vscode.Range(
+        document.positionAt(member.prefixStart),
+        position,
+      );
+      return members.map((m) => {
+        const item = new vscode.CompletionItem(
+          m.name,
+          m.callable
+            ? vscode.CompletionItemKind.Function
+            : vscode.CompletionItemKind.Field,
+        );
+        item.range = memberRange;
+        if (m.doc) {
+          item.documentation = new vscode.MarkdownString(m.doc);
+        }
+        return item;
+      });
+    }
+
+    const analyzed = this.documents.get(document);
+    const ctx = callContextAt(analyzed, offset);
+    if (!ctx || ctx.inValue) {
+      return [];
+    }
+    const schema = await this.schemas.schemaFor(ctx.callee, file);
+    if (!schema) {
+      return [];
+    }
+    const range = new vscode.Range(
+      document.positionAt(ctx.prefixStart),
+      position,
+    );
+    const items: vscode.CompletionItem[] = [];
+    offeredAttrs(schema).forEach((attr, index) => {
+      if (ctx.existingKeywords.has(attr.name)) {
+        return;
+      }
+      const item = new vscode.CompletionItem(
+        attr.name,
+        attr.type === "param"
+          ? vscode.CompletionItemKind.Variable
+          : vscode.CompletionItemKind.Property,
+      );
+      if (ctx.keywordEnd !== undefined) {
+        // Inside an existing keyword: replace the whole name, keep its `=`.
+        item.range = new vscode.Range(
+          document.positionAt(ctx.prefixStart),
+          document.positionAt(ctx.keywordEnd),
+        );
+        item.insertText = attr.name;
+      } else {
+        item.range = range;
+        item.insertText = new vscode.SnippetString(`${attr.name} = $0`);
+      }
+      item.detail = attr.type === "param" ? undefined : attr.type;
+      item.documentation = attrMarkdown(attr);
+      // Required attributes first, then declared ones in order, then the
+      // attributes common to all rules.
+      const group =
+        attr.name === "name" ? 0 : attr.mandatory ? 1 : attr.implicit ? 3 : 2;
+      item.sortText = `${group}${String(index).padStart(4, "0")}`;
+      items.push(item);
+    });
     return items;
   }
 

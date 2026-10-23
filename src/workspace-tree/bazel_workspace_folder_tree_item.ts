@@ -178,6 +178,7 @@ export class BazelWorkspaceFolderTreeItem implements IBazelTreeItem {
         this.resources,
         this.workspaceInfo,
         index,
+        this.manager.labels.schemas,
         parent,
         packagePath,
       );
@@ -261,10 +262,11 @@ export class BazelWorkspaceFolderTreeItem implements IBazelTreeItem {
 
     // Now collect any targets in the folder's own package, if it is one.
     const targets = inScope(relativePath, scope)
-      ? targetTreeItems(
+      ? await targetTreeItems(
           this.resources,
           this.workspaceInfo,
           index,
+          this.manager.labels.schemas,
           this,
           relativePath,
         )

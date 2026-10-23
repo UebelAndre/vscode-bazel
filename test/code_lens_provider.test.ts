@@ -86,7 +86,12 @@ describe("CodeLensProvider", () => {
     };
     return {
       index,
-      manager: { getIndexForDocument: () => index } as any,
+      manager: {
+        getIndexForDocument: () => index,
+        labels: {
+          schemas: { schemaFor: async (): Promise<undefined> => undefined },
+        },
+      } as any,
     };
   }
 

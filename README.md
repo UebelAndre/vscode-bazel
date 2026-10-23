@@ -22,6 +22,9 @@ This extension provides support for Bazel in Visual Studio.
 - **Warnings for unpinned repositories**: `git_repository` without a
   `commit`, `http_archive`/`http_file`/`http_jar` without `integrity` or
   `sha256`, and the matching `MODULE.bazel` overrides
+- **Starlark-aware completion** of the attributes of Starlark-defined rules
+  and macros while calling them (with documentation and parameter hints),
+  and of the fields of `struct`s and providers after a `.`
 - **Starlark Debugger** to debug Starlark code in your `.bzl` files during analysis phase (set breakpoints, step
   through code, inspect variables, etc.)
 - **URI handler** to go to targets from outside of VSCode. (Example: vscode://bazelbuild.vscode-bazel//path/to/tests:target)
@@ -61,6 +64,16 @@ or debug, when picking targets with a query, and in the two cases below.
 Unnamed macro calls, calls whose `name` is computed, and syntax errors never
 break discovery: the affected call is skipped and the rest of the file is
 still indexed.
+
+Attribute completion and parameter hints come from statically reading the
+`rule(...)`, `macro(...)` and `def` definitions behind a call, following
+`load()` statements and re-exports such as `foo = _foo`, also into fetched
+external repositories. The evaluation understands how rulesets typically
+assemble attribute dictionaries (shared dictionaries, `a | b` unions,
+`dict(a, **b)`, `.update()`, fields of `semantics`-style structs, attribute
+factories, small helper functions, `rule(**kwargs)`) but does not execute
+Starlark; rules whose attributes are computed in other ways get the common
+attributes only. Rules native to Bazel are not covered.
 
 ## Configuring the Extension
 

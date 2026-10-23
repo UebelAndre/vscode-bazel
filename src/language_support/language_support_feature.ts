@@ -25,6 +25,7 @@ import {
 } from "./starlark_definition_provider";
 import { StarlarkCompletionProvider } from "./starlark_completion_provider";
 import { StarlarkHoverProvider } from "./starlark_hover_provider";
+import { StarlarkSignatureHelpProvider } from "./starlark_signature_help_provider";
 import { StarlarkSymbolProvider } from "./starlark_symbol_provider";
 import { RepositoryDiagnostics } from "./repository_diagnostics";
 
@@ -119,6 +120,7 @@ export class LanguageSupportFeature extends BaseExtensionFeature {
     this.logInfo("Enabling built-in language support");
 
     const resolver = manager.labels;
+    const schemas = resolver.schemas;
     const documents = new DocumentCache();
 
     this.disposables.push(
@@ -141,12 +143,19 @@ export class LanguageSupportFeature extends BaseExtensionFeature {
       ),
       vscode.languages.registerCompletionItemProvider(
         STARLARK_SELECTOR,
-        new StarlarkCompletionProvider(manager, resolver),
+        new StarlarkCompletionProvider(manager, resolver, schemas, documents),
         "/",
         ":",
         "@",
         '"',
         "'",
+        ".",
+      ),
+      vscode.languages.registerSignatureHelpProvider(
+        STARLARK_SELECTOR,
+        new StarlarkSignatureHelpProvider(schemas, documents),
+        "(",
+        ",",
       ),
     );
 

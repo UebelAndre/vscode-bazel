@@ -5,10 +5,13 @@ def _my_test_impl(ctx):
     ctx.actions.write(out, "", is_executable = True)
     return [DefaultInfo(executable = out)]
 
+# Not a literal: rulesets compute flags like this now and then.
+_IS_TEST = True
+
 my_test = rule(
     implementation = _my_test_impl,
     doc = "A test rule used by the extension's tests.",
-    test = True,
+    test = _IS_TEST,
 )
 
 def my_macro(name, **kwargs):
