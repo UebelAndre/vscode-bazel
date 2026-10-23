@@ -151,6 +151,23 @@ describe("loadContextAt", () => {
     });
   });
 
+  it("treats use_extension and use_repo_rule like load", () => {
+    const ext = at('python = use_extension("//python:ext.bzl", "py|');
+    assert.deepStrictEqual(loadContextAt(ext.text, ext.offset), {
+      callee: "use_extension",
+      kind: "symbol",
+      module: "//python:ext.bzl",
+      existing: [],
+    });
+    const repo = at(
+      'http_archive = use_repo_rule("@bazel_tools//tools:http.bzl", "|',
+    );
+    assert.strictEqual(
+      loadContextAt(repo.text, repo.offset)?.callee,
+      "use_repo_rule",
+    );
+  });
+
   it("recognizes symbol arguments and what is already loaded", () => {
     const { text, offset } = at(
       'load("//rust:defs.bzl", "rust_binary", lib = "rust_library", "ru|',

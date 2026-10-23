@@ -500,9 +500,13 @@ export function insideString(text: string, offset: number): boolean {
   return quote !== undefined;
 }
 
-/** The cursor is inside a string argument of a `load()` statement. */
+/**
+ * The cursor is inside a string argument of `load()`, or of the
+ * MODULE.bazel functions that name a .bzl file and a symbol in it:
+ * `use_extension()` and `use_repo_rule()`.
+ */
 export interface LoadContext {
-  /** The call the string belongs to, currently always `load`. */
+  /** `load`, `use_extension` or `use_repo_rule`. */
   callee: string;
   /** `module` for the first argument, `symbol` for the following ones. */
   kind: "module" | "symbol";
@@ -512,10 +516,10 @@ export interface LoadContext {
   existing: string[];
 }
 
-const LOADING_CALLEES = ["load"];
+const LOADING_CALLEES = ["load", "use_extension", "use_repo_rule"];
 
 /**
- * Detects whether the string at the cursor belongs to a `load()` call and
+ * Detects whether the string at the cursor belongs to a loading call and
  * which argument it is. Works on unfinished statements, since the string
  * being typed is usually not yet closed.
  */
