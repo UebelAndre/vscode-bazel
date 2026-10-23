@@ -18,6 +18,7 @@ import * as vscode from "vscode";
 
 import { BazelWorkspaceInfo } from "../bazel/bazel_workspace_info";
 import { getBazelWorkspaceFolder } from "../bazel/bazel_utils";
+import { LabelResolver } from "./label_resolver";
 import { ILogger } from "../extension/logger";
 import { affectsRenamedSetting } from "../extension/settings_migration";
 import {
@@ -50,10 +51,14 @@ export class IndexManager implements vscode.Disposable {
   /** Fires whenever any index changes. */
   public readonly onDidChange = this.onDidChangeEmitter.event;
 
+  /** Resolves labels and loaded symbols across the indexes. */
+  public readonly labels: LabelResolver;
+
   private readonly indexListeners = new Map<string, vscode.Disposable>();
 
   constructor(private readonly logger: ILogger) {
     IndexManager.instance = this;
+    this.labels = new LabelResolver(this, logger);
 
     const watcher = vscode.workspace.createFileSystemWatcher(
       "**/{BUILD,BUILD.bazel,*.bzl,MODULE.bazel,REPO.bazel,WORKSPACE," +
@@ -246,8 +251,9 @@ export class IndexManager implements vscode.Disposable {
     this.indexListeners.delete(root);
   }
 
-  /** Publishes a change. */
+  /** Publishes a change; resolved names are recomputed lazily. */
   private fire(change: IndexChange) {
+    this.labels.bindings.clear();
     this.onDidChangeEmitter.fire(change);
   }
 
@@ -372,11 +378,12 @@ export class IndexManager implements vscode.Disposable {
     }
   }
 
-  /** Drops cached parses after a `.bzl` file changed. */
+  /** Drops cached parses and resolved names after a `.bzl` file changed. */
   private invalidateStarlark(fsPath: string) {
     for (const index of this.indexes.values()) {
       index.invalidateFile(fsPath);
     }
+    this.labels.bindings.clear();
   }
 }
 

@@ -14,14 +14,15 @@
 
 import * as vscode from "vscode";
 
-import { activateTaskProvider } from "../bazel";
+import { BazelWorkspaceInfo, activateTaskProvider } from "../bazel";
 import { BuildifierFeature } from "../buildifier";
 import { CodeLensFeature } from "../codelens/code_lens_feature";
 import {
   BazelWorkspaceTreeProvider,
   WorkspaceTreeFeature,
 } from "../workspace-tree";
-import { targetToUri } from "../definition/bazel_goto_definition_provider";
+import { IndexManager } from "../index";
+import { resolveLabelToLocation } from "../language_support/starlark_definition_provider";
 import { activateCommandVariables } from "./command_variables";
 import { TestExplorerFeature } from "../test-explorer";
 import { activateWrapperCommands } from "./bazel_wrapper_commands";
@@ -34,7 +35,6 @@ import {
   showOutputChannel,
   ILogger,
 } from "./logger";
-import { IndexManager } from "../index";
 import { registerBazelWorkspaceAvailabilityWatcher } from "../bazel/bazel_availability";
 import { LanguageSupportFeature } from "../language_support/language_support_feature";
 import { logDeprecatedSettingsInUse } from "./settings_migration";
@@ -80,15 +80,16 @@ export async function activate(context: vscode.ExtensionContext) {
   // Watch for availability of bazel workspace
   registerBazelWorkspaceAvailabilityWatcher(context);
 
-  // Workspace index: parses BUILD files so that the outline and CodeLens
-  // never have to wait on `bazel query`.
+  // Workspace index: parses BUILD files so that the tree, CodeLens and
+  // language features never have to wait on `bazel query`.
   const indexLogger: ILogger = {
     logDebug: (m, show, ...args) => logDebug(`[Index] ${m}`, show, ...args),
     logInfo: (m, show, ...args) => logInfo(`[Index] ${m}`, show, ...args),
     logWarn: (m, show, ...args) => logWarn(`[Index] ${m}`, show, ...args),
     logError: (m, show, ...args) => logError(`[Index] ${m}`, show, ...args),
   };
-  context.subscriptions.push(new IndexManager(indexLogger));
+  const indexManager = new IndexManager(indexLogger);
+  context.subscriptions.push(indexManager);
 
   // WorkspaceTreeFeature
   const workspaceTreeFeature = await WorkspaceTreeFeature.create(context);
@@ -117,19 +118,22 @@ export async function activate(context: vscode.ExtensionContext) {
       async handleUri(uri: vscode.Uri) {
         try {
           const workspace = vscode.workspace.workspaceFolders[0];
-          const quotedUriPath = `"${uri.path}"`;
-          const location = await targetToUri(quotedUriPath, workspace.uri);
-
-          vscode.commands
-            .executeCommand(
-              "vscode.open",
-              vscode.Uri.file(location.path).with({
-                fragment: `${location.line}:${location.column}`,
-              }),
-            )
-            .then(undefined, (err) => {
-              logError("Could not open file", true, location.path, err);
-            });
+          const workspaceInfo =
+            BazelWorkspaceInfo.fromWorkspaceFolder(workspace);
+          if (!workspaceInfo) {
+            throw new Error("No Bazel workspace found");
+          }
+          const location = await resolveLabelToLocation(
+            indexManager,
+            uri.path,
+            workspaceInfo.bazelWorkspacePath,
+          );
+          if (!location) {
+            throw new Error(`Could not resolve label ${uri.path}`);
+          }
+          await vscode.window.showTextDocument(location.uri, {
+            selection: location.range,
+          });
         } catch (err: any) {
           logError("While handling URI", true, JSON.stringify(uri), err);
         }

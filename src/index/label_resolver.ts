@@ -1,0 +1,264 @@
+// Copyright 2026 The Bazel Authors. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import * as fs from "fs";
+import * as path from "path";
+import * as vscode from "vscode";
+
+import { ILogger } from "../extension/logger";
+import { BindingResolver, ModuleLoader } from "./bindings";
+import { BzlDefinition, BzlFileModel, IndexedTarget } from "./file_models";
+import type { IndexManager } from "./index_manager";
+import { ParsedLabel, parseLabel } from "./label";
+import {
+  BUILD_FILE_NAMES,
+  WorkspaceIndex,
+  packagePathOf,
+  toVsRange,
+} from "./workspace_index";
+
+/** The repository and package a Starlark file belongs to. */
+export interface FileContext {
+  /** Index of the main repository this file is viewed from. */
+  index: WorkspaceIndex;
+  /** Canonical name of the repository containing the file; `""` for main. */
+  canonicalRepo: string;
+  /** Root directory of that repository. */
+  repoRoot: string;
+  /** Package of the file within its repository. */
+  pkg: string;
+  file: string;
+}
+
+/** A resolved definition site. */
+export interface ResolvedLocation {
+  uri: vscode.Uri;
+  range: vscode.Range;
+  /** The target at the location, when the label named one. */
+  target?: IndexedTarget;
+  /** The Starlark definition at the location, when resolving a symbol. */
+  definition?: BzlDefinition;
+}
+
+/** Whether a path names an existing regular file. */
+function isFile(fsPath: string): boolean {
+  try {
+    return fs.statSync(fsPath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Finds the BUILD file of a directory, if any. */
+export function findBuildFile(dir: string): string | undefined {
+  for (const name of BUILD_FILE_NAMES) {
+    const candidate = path.join(dir, name);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Finds the package containing `fsPath` inside `repoRoot` by walking up to
+ * the nearest directory with a BUILD file.
+ */
+function enclosingPackage(repoRoot: string, fsPath: string): string {
+  let dir = path.dirname(fsPath);
+  for (;;) {
+    const pkg = packagePathOf(repoRoot, dir);
+    if (pkg === undefined) {
+      return "";
+    }
+    if (pkg === "" || findBuildFile(dir)) {
+      return pkg;
+    }
+    dir = path.dirname(dir);
+  }
+}
+
+/** The location of a target's `name` attribute. */
+function targetLocation(target: IndexedTarget): ResolvedLocation {
+  return {
+    uri: vscode.Uri.file(target.file),
+    range: toVsRange(target.nameRange),
+    target,
+  };
+}
+
+/**
+ * Resolves labels and loaded symbols to source locations using the index.
+ * Also serves as the file loader of name resolution, so that following a
+ * `load()` uses the same label rules as go to definition.
+ */
+export class LabelResolver implements ModuleLoader {
+  /** Resolves top-level names across files. */
+  public readonly bindings = new BindingResolver(this);
+
+  constructor(
+    private readonly manager: IndexManager,
+    private readonly logger: ILogger,
+  ) {}
+
+  // -------------------------------------------------------------------------
+  // ModuleLoader
+
+  public async resolveModule(
+    moduleLabel: string,
+    fromFile: string,
+  ): Promise<string | undefined> {
+    const ctx = await this.contextFor(fromFile);
+    if (!ctx) {
+      return undefined;
+    }
+    return (await this.resolveLoadModule(moduleLabel, ctx))?.file;
+  }
+
+  public getModel(file: string): BzlFileModel | undefined {
+    const index =
+      this.manager.getIndexForPath(file) ?? this.manager.getIndexes()[0];
+    return index?.getBzlModel(file);
+  }
+
+  // -------------------------------------------------------------------------
+  // Contexts
+
+  /** Determines which repository and package a file belongs to. */
+  public async contextFor(fsPath: string): Promise<FileContext | undefined> {
+    const index = this.manager.getIndexForPath(fsPath);
+    if (!index) {
+      return undefined;
+    }
+    return {
+      index,
+      canonicalRepo: "",
+      repoRoot: index.root,
+      pkg: enclosingPackage(index.root, fsPath),
+      file: fsPath,
+    };
+  }
+
+  /**
+   * Resolves the directory of the repository a label refers to: the current
+   * repository for labels without a repository part and for the main
+   * module's own name. Other repositories are not resolved yet.
+   */
+  public async repoDirFor(
+    label: ParsedLabel,
+    ctx: FileContext,
+  ): Promise<{ dir: string; canonical: string } | undefined> {
+    if (label.repo === undefined) {
+      return { dir: ctx.repoRoot, canonical: ctx.canonicalRepo };
+    }
+    if (
+      ctx.canonicalRepo === "" &&
+      (label.repo === "" ||
+        ctx.index.getModuleModel()?.selfNames.includes(label.repo))
+    ) {
+      // `@my_module//...` from inside my_module.
+      return { dir: ctx.repoRoot, canonical: "" };
+    }
+    return undefined;
+  }
+
+  // -------------------------------------------------------------------------
+  // Labels
+
+  /** Resolves a label to the locations that define it. */
+  public async resolveLabel(
+    label: ParsedLabel,
+    ctx: FileContext,
+  ): Promise<ResolvedLocation[]> {
+    const repo = await this.repoDirFor(label, ctx);
+    if (!repo) {
+      return [];
+    }
+    const pkgDir = path.join(repo.dir, ...label.pkg.split("/"));
+    let target: IndexedTarget | undefined;
+    if (repo.canonical === "" && repo.dir === ctx.index.root) {
+      target = ctx.index.findTarget(label.pkg, label.name);
+    } else {
+      const buildFile = findBuildFile(pkgDir);
+      target = buildFile
+        ? ctx.index
+            .getForeignBuildModel(buildFile, label.pkg)
+            ?.targets.find((t) => t.name === label.name)
+        : undefined;
+    }
+    if (target) {
+      return [targetLocation(target)];
+    }
+    const file = path.join(pkgDir, label.name);
+    return isFile(file)
+      ? [{ uri: vscode.Uri.file(file), range: new vscode.Range(0, 0, 0, 0) }]
+      : [];
+  }
+
+  /** Resolves the `.bzl` file named by a `load()` statement. */
+  public async resolveLoadModule(
+    moduleLabel: string,
+    ctx: FileContext,
+  ): Promise<{ file: string; ctx: FileContext } | undefined> {
+    const label = parseLabel(moduleLabel, ctx.pkg);
+    if (!label) {
+      return undefined;
+    }
+    const repo = await this.repoDirFor(label, ctx);
+    if (!repo) {
+      return undefined;
+    }
+    const file = path.join(repo.dir, ...label.pkg.split("/"), label.name);
+    if (!isFile(file)) {
+      return undefined;
+    }
+    return {
+      file,
+      ctx: {
+        ...ctx,
+        canonicalRepo: repo.canonical,
+        repoRoot: repo.dir,
+        pkg: label.pkg,
+        file,
+      },
+    };
+  }
+
+  /**
+   * Resolves a symbol loaded from a module to its definition, following
+   * re-exports such as `foo = _foo` and chained loads.
+   */
+  public async resolveLoadedSymbol(
+    moduleLabel: string,
+    symbol: string,
+    ctx: FileContext,
+  ): Promise<ResolvedLocation[]> {
+    const resolved = await this.resolveLoadModule(moduleLabel, ctx);
+    if (!resolved) {
+      return [];
+    }
+    const binding = await this.bindings.bindingFor(symbol, resolved.file);
+    const definition = binding?.model.definitions.get(binding.name);
+    if (!binding || !definition) {
+      return [];
+    }
+    return [
+      {
+        uri: vscode.Uri.file(binding.file),
+        range: toVsRange(definition.nameRange),
+        definition,
+      },
+    ];
+  }
+}
