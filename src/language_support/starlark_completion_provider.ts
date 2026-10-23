@@ -102,10 +102,32 @@ export class StarlarkCompletionProvider
     }
     const range = rangeBefore(position, prefix.length);
     const taken = new Set(load.existing);
+    // use_extension() names a module extension, use_repo_rule() a
+    // repository rule; load() takes any exported symbol.
+    const wanted =
+      load.callee === "use_extension"
+        ? "module_extension"
+        : load.callee === "use_repo_rule"
+          ? "repository_rule"
+          : undefined;
     const items: vscode.CompletionItem[] = [];
     for (const def of model.definitions.values()) {
       if (def.name.startsWith("_") || taken.has(def.name)) {
         continue;
+      }
+      if (wanted && def.kind !== wanted) {
+        if (def.kind !== "variable") {
+          continue;
+        }
+        // `pip = _pip`: look through the alias.
+        const binding = await this.resolver.bindings.bindingFor(
+          def.name,
+          resolved.file,
+        );
+        const aliased = binding?.model.definitions.get(binding.name);
+        if (aliased?.kind !== wanted) {
+          continue;
+        }
       }
       const item = new vscode.CompletionItem(
         def.name,

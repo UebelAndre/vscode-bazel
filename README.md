@@ -24,7 +24,8 @@ This extension provides support for Bazel in Visual Studio.
   `sha256`, and the matching `MODULE.bazel` overrides
 - **Starlark-aware completion** of the attributes of Starlark-defined rules
   and macros while calling them (with documentation and parameter hints),
-  and of the fields of `struct`s and providers after a `.`
+  of the fields of `struct`s and providers after a `.`, and of module
+  extension tags and `use_repo_rule` proxies in `MODULE.bazel`
 - **Starlark Debugger** to debug Starlark code in your `.bzl` files during analysis phase (set breakpoints, step
   through code, inspect variables, etc.)
 - **URI handler** to go to targets from outside of VSCode. (Example: vscode://bazelbuild.vscode-bazel//path/to/tests:target)

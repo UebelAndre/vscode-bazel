@@ -3,3 +3,17 @@ module(name = "module_workspace")
 # Repositories for the extension's own tests; see pkg3/extensions.bzl.
 fixture_repos = use_extension("//pkg3:extensions.bzl", "fixture_repos")
 use_repo(fixture_repos, "hub", renamed = "spoke")
+
+# A ruleset-style extension with tag classes; see pkg3/vendored_extension.bzl.
+requirements = use_extension("//pkg3:vendored_extension.bzl", "requirements")
+requirements.parse(
+    name = "vendored_pip",
+    requirements_lock = "//pkg3:data.txt",
+)
+use_repo(requirements, "vendored_pip")
+
+vendored_repo = use_repo_rule("//pkg3:vendored_extension.bzl", "vendored_repo")
+vendored_repo(
+    name = "vendored_constant",
+    value = "constant",
+)

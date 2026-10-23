@@ -351,10 +351,12 @@ export class IndexManager implements vscode.Disposable {
       for (const index of this.indexes.values()) {
         index.invalidateFile(fsPath);
       }
-      // The visible repositories and their names may have changed.
+      // The visible repositories and their names may have changed, and so
+      // may the extension proxies that MODULE.bazel schemas were read from.
       for (const resolver of this.resolvers.values()) {
         resolver.invalidate();
       }
+      this.labels.schemas.clear();
       const owner = this.indexes.get(path.dirname(fsPath));
       if (name === ".bazelignore") {
         // Only a repository's own `.bazelignore` affects what it indexes.
@@ -396,7 +398,11 @@ export class IndexManager implements vscode.Disposable {
     }
     const fsPath = document.uri.fsPath;
     const name = path.basename(fsPath);
-    if (!isBuildFileName(name) && !isBzlFileName(name)) {
+    if (
+      !isBuildFileName(name) &&
+      !isBzlFileName(name) &&
+      !isModuleFileName(name)
+    ) {
       return;
     }
     const pending = this.pendingDocuments.get(fsPath);
