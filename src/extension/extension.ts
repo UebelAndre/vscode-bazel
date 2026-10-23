@@ -25,7 +25,16 @@ import { targetToUri } from "../definition/bazel_goto_definition_provider";
 import { activateCommandVariables } from "./command_variables";
 import { TestExplorerFeature } from "../test-explorer";
 import { activateWrapperCommands } from "./bazel_wrapper_commands";
-import { registerLogger, logInfo, logError, showOutputChannel } from "./logger";
+import {
+  registerLogger,
+  logDebug,
+  logInfo,
+  logWarn,
+  logError,
+  showOutputChannel,
+  ILogger,
+} from "./logger";
+import { IndexManager } from "../index";
 import { registerBazelWorkspaceAvailabilityWatcher } from "../bazel/bazel_availability";
 import { LanguageSupportFeature } from "../language_support/language_support_feature";
 import { logDeprecatedSettingsInUse } from "./settings_migration";
@@ -70,6 +79,16 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Watch for availability of bazel workspace
   registerBazelWorkspaceAvailabilityWatcher(context);
+
+  // Workspace index: parses BUILD files so that the outline and CodeLens
+  // never have to wait on `bazel query`.
+  const indexLogger: ILogger = {
+    logDebug: (m, show, ...args) => logDebug(`[Index] ${m}`, show, ...args),
+    logInfo: (m, show, ...args) => logInfo(`[Index] ${m}`, show, ...args),
+    logWarn: (m, show, ...args) => logWarn(`[Index] ${m}`, show, ...args),
+    logError: (m, show, ...args) => logError(`[Index] ${m}`, show, ...args),
+  };
+  context.subscriptions.push(new IndexManager(indexLogger));
 
   // WorkspaceTreeFeature
   const workspaceTreeFeature = await WorkspaceTreeFeature.create(context);
