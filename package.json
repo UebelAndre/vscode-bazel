@@ -222,6 +222,22 @@
                         "order": 0,
                         "default": true,
                         "markdownDescription": "After the workspace has been indexed, run `bazel mod dump_repo_mapping` once in the background to learn how the main module names its external repositories. With this, Ctrl/Cmd+click on `@repo//...` labels resolves (and offers to fetch) without invoking Bazel at click time. Disable to keep Bazel completely out of the picture until you click into an external repository."
+                    },
+                    "bazel.index.macroTargets": {
+                        "type": "string",
+                        "order": 1,
+                        "enum": [
+                            "off",
+                            "openFiles",
+                            "workspace"
+                        ],
+                        "default": "off",
+                        "markdownEnumDescriptions": [
+                            "Show only the targets named in `BUILD` files. Discovery never invokes Bazel.",
+                            "Also show the targets a macro creates (for example the `foo_lib` behind `foo_binary(name = \"foo\")`), for the `BUILD` files you open. **Warning:** this runs `bazel query` whenever you open or save a `BUILD` file that calls a macro. Each query takes the Bazel server lock, so it can be delayed by a build running in a terminal and can delay such a build. Consider `bazel.commandLine.queriesShareServer: false` to isolate these queries.",
+                            "Also show the targets macros create everywhere: one `bazel query` of the whole workspace in the background after indexing, again on *Refresh Bazel Build Targets*, and at most every few minutes after a `BUILD` file with macro calls changes."
+                        ],
+                        "markdownDescription": "Whether to discover targets created inside macros, which requires `bazel query`. Generated targets appear in the tree and CodeLens alongside the named ones, with a chooser when several targets share a line."
                     }
                 }
             },
