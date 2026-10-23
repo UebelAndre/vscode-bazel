@@ -28,6 +28,7 @@ import {
   getLspServerExecutablePath,
   getLspWasmPath,
 } from "../extension/configuration";
+import { RepositoryDiagnostics } from "./repository_diagnostics";
 
 /**
  * Language Support feature for Bazel.
@@ -59,13 +60,17 @@ export class LanguageSupportFeature extends BaseExtensionFeature {
     const wasm = lspCommand ? undefined : await this.starplsWasm(context);
     this.isUsingExternalLSP = !!lspCommand || !!wasm;
 
-    if (lspCommand) {
-      return this.enableExternalLSP(context);
+    const enabled = lspCommand
+      ? this.enableExternalLSP(context)
+      : wasm
+        ? this.enableWasmLSP(context, wasm)
+        : this.enableBuiltInSupport(context);
+    if (enabled) {
+      // Lint-style warnings are independent of which server answers
+      // language queries.
+      this.disposables.push(new RepositoryDiagnostics());
     }
-    if (wasm) {
-      return this.enableWasmLSP(context, wasm);
-    }
-    return this.enableBuiltInSupport(context);
+    return enabled;
   }
 
   /**
