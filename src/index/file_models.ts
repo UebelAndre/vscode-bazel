@@ -166,12 +166,13 @@ function ruleKindFromCallee(callee: string): string {
   return callee.startsWith("native.") ? callee.slice("native.".length) : callee;
 }
 
-function findKeyword(call: CallExpr, name: string): Expr | undefined {
+/** The value of the keyword argument `name` of a call, if given. */
+export function findKeyword(call: CallExpr, name: string): Expr | undefined {
   return call.args.find((a) => a.name === name)?.value;
 }
 
 /** The value of a literal `True`/`False` expression. */
-function boolLiteral(expr: Expr | undefined): boolean | undefined {
+export function boolLiteral(expr: Expr | undefined): boolean | undefined {
   if (expr?.kind !== "ident") {
     return undefined;
   }

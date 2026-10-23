@@ -20,4 +20,5 @@ export * from "./label";
 export * from "./label_resolver";
 export * from "./macro_targets";
 export * from "./rule_info";
+export * from "./rule_schema";
 export * from "./workspace_index";

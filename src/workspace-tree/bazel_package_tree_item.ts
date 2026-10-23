@@ -15,7 +15,7 @@
 import * as vscode from "vscode";
 import { BazelWorkspaceInfo } from "../bazel";
 import { IBazelCommandAdapter, IBazelCommandOptions } from "../bazel";
-import { WorkspaceIndex, ruleInfoFor } from "../index";
+import { SchemaResolver, WorkspaceIndex, ruleInfoFor } from "../index";
 import { BazelTargetTreeItem } from "./bazel_target_tree_item";
 import { IBazelTreeItem } from "./bazel_tree_item";
 import { Resources } from "../extension/resources";
@@ -36,6 +36,7 @@ export class BazelPackageTreeItem
    * @param resources The resources for the extension.
    * @param workspaceInfo The workspace information.
    * @param index The workspace index providing the package's targets.
+   * @param schemas Resolver for rule definitions.
    * @param parent The parent tree item of this item.
    * @param packagePath The path to the build package that this item represents.
    */
@@ -43,6 +44,7 @@ export class BazelPackageTreeItem
     private readonly resources: Resources,
     private readonly workspaceInfo: BazelWorkspaceInfo,
     private readonly index: WorkspaceIndex,
+    private readonly schemas: SchemaResolver,
     private readonly parent: IBazelTreeItem,
     private readonly packagePath: string,
   ) {}
@@ -51,17 +53,16 @@ export class BazelPackageTreeItem
     return true;
   }
 
-  public getChildren(): Promise<IBazelTreeItem[]> {
-    const targets = targetTreeItems(
+  public async getChildren(): Promise<IBazelTreeItem[]> {
+    const targets = await targetTreeItems(
       this.resources,
       this.workspaceInfo,
       this.index,
+      this.schemas,
       this,
       this.packagePath,
     );
-    return Promise.resolve(
-      (this.directSubpackages as IBazelTreeItem[]).concat(targets),
-    );
+    return (this.directSubpackages as IBazelTreeItem[]).concat(targets);
   }
 
   public getParent(): vscode.ProviderResult<IBazelTreeItem> {
@@ -110,23 +111,27 @@ export class BazelPackageTreeItem
 }
 
 /** Creates the target items of a package, sorted by name. */
-export function targetTreeItems(
+export async function targetTreeItems(
   resources: Resources,
   workspaceInfo: BazelWorkspaceInfo,
   index: WorkspaceIndex,
+  schemas: SchemaResolver,
   parent: IBazelTreeItem,
   packagePath: string,
-): BazelTargetTreeItem[] {
-  return [...index.getTargets(packagePath)]
-    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-    .map(
-      (target) =>
+): Promise<BazelTargetTreeItem[]> {
+  const targets = [...index.getTargets(packagePath)].sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  );
+  return Promise.all(
+    targets.map(
+      async (target) =>
         new BazelTargetTreeItem(
           resources,
           workspaceInfo,
           parent,
           target,
-          ruleInfoFor(target),
+          await ruleInfoFor(schemas, target),
         ),
-    );
+    ),
+  );
 }

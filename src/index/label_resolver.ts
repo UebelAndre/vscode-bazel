@@ -22,6 +22,7 @@ import { ExternalRepoResolver, RepoResolution } from "./external_repos";
 import { BzlDefinition, BzlFileModel, IndexedTarget } from "./file_models";
 import type { IndexManager } from "./index_manager";
 import { ParsedLabel, parseLabel } from "./label";
+import { SchemaResolver } from "./rule_schema";
 import {
   BUILD_FILE_NAMES,
   WorkspaceIndex,
@@ -105,12 +106,14 @@ function targetLocation(target: IndexedTarget): ResolvedLocation {
 /**
  * Resolves labels and loaded symbols to source locations using the index
  * and, for external repositories, the files Bazel has fetched. Also serves
- * as the file loader of name resolution, so that following a `load()` uses
- * the same label rules as go to definition.
+ * as the file loader of name resolution and schema evaluation, so that
+ * following a `load()` uses the same label rules as go to definition.
  */
 export class LabelResolver implements ModuleLoader {
   /** Resolves top-level names across files. */
   public readonly bindings = new BindingResolver(this);
+  /** Schemas of rules, macros, structs and providers reachable from files. */
+  public readonly schemas = new SchemaResolver(this, this.bindings);
 
   constructor(
     private readonly manager: IndexManager,
@@ -255,6 +258,8 @@ export class LabelResolver implements ModuleLoader {
             },
             () => ctx.resolver.fetchRepo(resolution.canonical),
           );
+          // Names that could not be resolved before may exist now.
+          this.schemas.clear();
           const first = (await this.resolveLabel(label, ctx, false))[0];
           if (first) {
             await vscode.window.showTextDocument(first.uri, {

@@ -21,6 +21,7 @@ import {
   Module,
   Stmt,
   StringLiteral,
+  calleeName,
   parseModule,
   stmtExprs,
   walkExpr,
@@ -221,6 +222,260 @@ export function topLevelBinding(
     }
   }
   return undefined;
+}
+
+/** Where the cursor sits relative to a call's argument list. */
+export interface CallContext {
+  /** Name of the callee as written, e.g. `rust_binary` or `native.foo`. */
+  callee: string;
+  /** Keywords already supplied in the call. */
+  existingKeywords: Set<string>;
+  /** True when the cursor is inside an argument value (after `=`). */
+  inValue: boolean;
+  /** The keyword whose value the cursor is in, if any. */
+  activeKeyword?: string;
+  /** Partial keyword typed at the cursor (empty when between arguments). */
+  prefix: string;
+  /** Offset where `prefix` starts. */
+  prefixStart: number;
+  /** End of the keyword name when the cursor is inside an existing one. */
+  keywordEnd?: number;
+}
+
+function callContextFromAst(
+  doc: AnalyzedDocument,
+  offset: number,
+): CallContext | undefined {
+  let innermost: CallExpr | undefined;
+  const visitExpr = (root: Expr) => {
+    walkExpr(root, (e) => {
+      if (!contains(e, offset)) {
+        return false;
+      }
+      if (e.kind === "call" && e.lparen < offset && offset < e.end) {
+        innermost = e;
+      }
+      return true;
+    });
+  };
+  walkStmts(doc.module.stmts, (stmt) => {
+    if (!contains(stmt, offset)) {
+      return false;
+    }
+    for (const expr of stmtExprs(stmt)) {
+      if (contains(expr, offset)) {
+        visitExpr(expr);
+      }
+    }
+    return true;
+  });
+  if (!innermost) {
+    return undefined;
+  }
+  const call: CallExpr = innermost;
+  const callee = calleeName(call.func);
+  if (!callee) {
+    return undefined;
+  }
+  const existingKeywords = new Set(
+    call.args.flatMap((a) => (a.name ? [a.name] : [])),
+  );
+  for (const arg of call.args) {
+    if (arg.name && arg.nameSpan && contains(arg.nameSpan, offset)) {
+      existingKeywords.delete(arg.name);
+      return {
+        callee,
+        existingKeywords,
+        inValue: false,
+        prefix: doc.text.slice(arg.nameSpan.start, offset),
+        prefixStart: arg.nameSpan.start,
+        keywordEnd: arg.nameSpan.end,
+      };
+    }
+    if (contains(arg.value, offset) && offset > arg.value.start) {
+      if (!arg.name && !arg.star && arg.value.kind === "ident") {
+        return {
+          callee,
+          existingKeywords,
+          inValue: false,
+          prefix: doc.text.slice(arg.value.start, offset),
+          prefixStart: arg.value.start,
+        };
+      }
+      return {
+        callee,
+        existingKeywords,
+        inValue: true,
+        activeKeyword: arg.name,
+        prefix: "",
+        prefixStart: offset,
+      };
+    }
+  }
+  return {
+    callee,
+    existingKeywords,
+    inValue: false,
+    prefix: "",
+    prefixStart: offset,
+  };
+}
+
+/**
+ * Textual fallback for documents that do not parse around the cursor, e.g.
+ * while a call is still being typed: scans back to the unmatched `(`.
+ */
+function callContextFromText(
+  text: string,
+  offset: number,
+): CallContext | undefined {
+  let depth = 0;
+  let i = offset - 1;
+  let quote: string | undefined;
+  for (; i >= 0; i--) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote && text[i - 1] !== "\\") {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      // Scanning backwards we cannot tell opening from closing quotes
+      // reliably; assume balanced strings and skip to the matching one.
+      quote = ch;
+      continue;
+    }
+    if (ch === ")" || ch === "]" || ch === "}") {
+      depth++;
+    } else if (ch === "[" || ch === "{") {
+      // An unclosed list or dict before the cursor: still inside the call.
+      if (depth > 0) {
+        depth--;
+      }
+    } else if (ch === "(") {
+      if (depth === 0) {
+        break;
+      }
+      depth--;
+    }
+  }
+  if (i < 0) {
+    return undefined;
+  }
+  const before = text.slice(0, i);
+  const calleeMatch = /([A-Za-z_][\w.]*)\s*$/.exec(before);
+  if (!calleeMatch || /\bdef\s+$/.test(before.slice(0, calleeMatch.index))) {
+    // No callee, or a function being defined rather than called.
+    return undefined;
+  }
+  const inside = text.slice(i + 1, offset);
+  // Forward scan of the argument text: collect the keywords of top-level
+  // arguments, find the start of the current argument (last top-level
+  // comma) and whether a bracket is still open.
+  const existingKeywords = new Set<string>();
+  const noteKeyword = (argument: string) => {
+    const m = /^\s*([A-Za-z_]\w*)\s*=(?!=)/.exec(argument);
+    if (m) {
+      existingKeywords.add(m[1]);
+    }
+  };
+  let nesting = 0;
+  let argStart = 0;
+  let firstOpen = -1;
+  let inQuote: string | undefined;
+  for (let j = 0; j < inside.length; j++) {
+    const ch = inside[j];
+    if (inQuote) {
+      if (ch === "\\") {
+        j++;
+      } else if (ch === inQuote) {
+        inQuote = undefined;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inQuote = ch;
+    } else if (ch === "(" || ch === "[" || ch === "{") {
+      if (nesting === 0) {
+        firstOpen = j;
+      }
+      nesting++;
+    } else if (ch === ")" || ch === "]" || ch === "}") {
+      nesting = Math.max(0, nesting - 1);
+      if (nesting === 0) {
+        firstOpen = -1;
+      }
+    } else if (ch === "," && nesting === 0) {
+      noteKeyword(inside.slice(argStart, j));
+      argStart = j + 1;
+    }
+  }
+  noteKeyword(inside.slice(argStart));
+  const callee = calleeMatch[1];
+  const current =
+    nesting > 0 ? inside.slice(argStart, firstOpen) : inside.slice(argStart);
+  const eq = current.indexOf("=");
+  if (nesting > 0 || eq !== -1) {
+    const keywordText = eq === -1 ? current : current.slice(0, eq);
+    const keyword = /([A-Za-z_]\w*)\s*$/.exec(keywordText)?.[1];
+    return {
+      callee,
+      existingKeywords,
+      inValue: true,
+      activeKeyword: keyword,
+      prefix: "",
+      prefixStart: offset,
+    };
+  }
+  const prefix = /([A-Za-z_]\w*)$/.exec(current)?.[1] ?? "";
+  return {
+    callee,
+    existingKeywords,
+    inValue: false,
+    prefix,
+    prefixStart: offset - prefix.length,
+  };
+}
+
+/**
+ * Describes the call the cursor is in, if any. The textual fallback is
+ * only consulted when the document did not parse cleanly, i.e. while the
+ * call is still being typed.
+ */
+export function callContextAt(
+  doc: AnalyzedDocument,
+  offset: number,
+): CallContext | undefined {
+  const fromAst = callContextFromAst(doc, offset);
+  if (fromAst || doc.module.errors.length === 0) {
+    return fromAst;
+  }
+  return callContextFromText(doc.text, offset);
+}
+
+/**
+ * Detects `foo.bar.` member access before the cursor and returns the path
+ * and the partially typed member name.
+ */
+export function memberAccessAt(
+  text: string,
+  offset: number,
+): { path: string[]; prefix: string; prefixStart: number } | undefined {
+  const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
+  const before = text.slice(lineStart, offset);
+  const match = /([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.([A-Za-z_]\w*)?$/.exec(
+    before,
+  );
+  if (!match) {
+    return undefined;
+  }
+  const prefix = match[2] ?? "";
+  return {
+    path: match[1].split("."),
+    prefix,
+    prefixStart: offset - prefix.length,
+  };
 }
 
 /** Whether the cursor is inside a string literal on its line. */
