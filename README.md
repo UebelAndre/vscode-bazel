@@ -30,23 +30,37 @@ This extension provides support for Bazel in Visual Studio.
 
 The extension discovers packages and targets by parsing `BUILD` and `.bzl`
 files itself rather than by running `bazel query`. This keeps the **Bazel
-Targets** tree, outline and CodeLens instant, reflects unsaved edits immediately, and never takes the
-Bazel server lock, so a running `bazel build` in a terminal is not blocked by
-the editor (and vice versa). Unnamed macro calls, calls whose `name` is
-computed, and syntax errors never break discovery: the affected call is
-skipped and the rest of the file is still indexed.
+Targets** tree, CodeLens, outline, completion, hover, and go to definition
+instant, reflects unsaved edits immediately, and never takes the Bazel server
+lock, so a running `bazel build` in a terminal is not blocked by the editor
+(and vice versa). Bazel is only invoked when you ask for a build, test, run,
+or debug, when picking targets with a query, and in the two cases below.
 
-Bazel is only invoked when you ask for a build, test, run, or debug, when
-picking targets with a query, and for **external repositories**: go to
-definition on `@repo//...` labels opens the fetched copy of the repository
-under Bazel's output base. The repository is located by naming convention
-when possible; otherwise the extension asks Bazel for the repository mapping
-(`bazel mod dump_repo_mapping`) and caches the answer until `MODULE.bazel`
-changes. By default the main module's mapping is loaded once in the
-background after indexing (`bazel.index.resolveRepositoriesOnStartup`), so
-clicks resolve without Bazel afterwards. Repositories that have not been
-fetched yet are offered to be fetched on demand. A module nested in a
-`.bazelignore`d directory is treated as a workspace of its own.
+- **External repositories.** Go to definition on `@repo//...` labels opens
+  the fetched copy of the repository under Bazel's output base. The
+  repository is located by naming convention when possible; otherwise the
+  extension asks Bazel for the repository mapping
+  (`bazel mod dump_repo_mapping`) and caches the answer until `MODULE.bazel`
+  changes. By default the main module's mapping is loaded once in the
+  background after indexing (`bazel.index.resolveRepositoriesOnStartup`),
+  so clicks resolve without Bazel afterwards. Repositories that have not
+  been fetched yet are offered to be fetched on demand. A module nested in
+  a `.bazelignore`d directory is treated as a workspace of its own.
+- **Macro-generated targets.** Targets created inside macros (for example a
+  `foo_lib` created by `foo_binary(name = "foo")`) are not visible to the
+  parser. `bazel.index.macroTargets` controls whether the extension asks
+  Bazel for them. `openFiles` runs `bazel query` for a package whenever you
+  open or save a `BUILD` file in it that calls a macro; these queries take
+  the Bazel server lock and can contend with builds you run yourself.
+  `workspace` runs one query of the whole workspace in the background after
+  indexing, on _Refresh Bazel Build Targets_, and at most every few minutes
+  after a `BUILD` file with macro calls changes. Generated targets are shown
+  alongside the named ones, with a chooser when several share a line. The
+  default is `off`, since most users care about the targets they named.
+
+Unnamed macro calls, calls whose `name` is computed, and syntax errors never
+break discovery: the affected call is skipped and the rest of the file is
+still indexed.
 
 ## Configuring the Extension
 
@@ -80,7 +94,7 @@ independently for each folder.
 
 ### Using a separate output base
 
-By default this extension will use the default output base for running queries. This will cause builds to block queries, potentially causing degraded performance. In Bazel versions since 7.1 it is safe to disable this by changing the `bazel.commandLine.queriesShareServer` setting to `false`. In earlier versions it can be safely disabled after adding the convenience symlinks to `.bazelignore`, for example:
+Navigation features do not run queries (see [How targets are discovered](#how-targets-are-discovered)), but the target quick pick and the optional macro-generated target discovery do. By default those queries use the default output base, so a running build can delay them. In Bazel versions since 7.1 it is safe to avoid this by changing the `bazel.commandLine.queriesShareServer` setting to `false`. In earlier versions it can be safely disabled after adding the convenience symlinks to `.bazelignore`, for example:
 
 ```
 bazel-myreponame

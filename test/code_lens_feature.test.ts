@@ -3,6 +3,7 @@ import * as assert from "assert";
 import * as sinon from "sinon";
 import { CodeLensFeature } from "../src/codelens/code_lens_feature";
 import { CodeLensProvider } from "../src/codelens/code_lens_provider";
+import { IndexManager } from "../src/index";
 import * as bazel_availability from "../src/bazel/bazel_availability";
 
 describe("CodeLensFeature", () => {
@@ -53,6 +54,23 @@ describe("CodeLensFeature", () => {
         [{ pattern: "**/BUILD" }, { pattern: "**/BUILD.bazel" }],
         sinon.match.instanceOf(CodeLensProvider),
       );
+    });
+
+    it("refreshes lenses when the index changes", async () => {
+      sandbox.stub(bazel_availability, "checkBazelIsAvailable").returns(true);
+      sandbox
+        .stub(vscode.languages, "registerCodeLensProvider")
+        .returns(mockDisposable);
+      const changes = new vscode.EventEmitter<unknown>();
+      sandbox
+        .stub(IndexManager, "get")
+        .returns({ onDidChange: changes.event } as unknown as IndexManager);
+      const refreshStub = sandbox.stub(CodeLensProvider.prototype, "refresh");
+
+      await codeLensFeature.enable(mockContext);
+      changes.fire({});
+
+      sinon.assert.calledOnce(refreshStub);
     });
   });
 });

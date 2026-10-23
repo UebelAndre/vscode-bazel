@@ -53,6 +53,11 @@ export interface IndexedTarget {
   nameRange: SourceRange;
   /** The literal `executable = True/False` argument, when there is one. */
   executable?: boolean;
+  /** Set for targets discovered through `bazel query` rather than parsing. */
+  generated?: {
+    generatorName: string;
+    generatorFunction: string;
+  };
 }
 
 /** A top-level call in a BUILD file that did not yield a named target. */

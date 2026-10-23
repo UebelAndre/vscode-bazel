@@ -18,5 +18,6 @@ export * from "./file_models";
 export * from "./index_manager";
 export * from "./label";
 export * from "./label_resolver";
+export * from "./macro_targets";
 export * from "./rule_info";
 export * from "./workspace_index";

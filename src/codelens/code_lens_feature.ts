@@ -33,6 +33,12 @@ export class CodeLensFeature extends BaseExtensionFeature {
     // Create and register the CodeLens provider
     const codelensProvider = new CodeLensProvider(manager, this.getLogger());
 
+    // Lenses depend on more than the document once macro-generated targets
+    // are discovered through Bazel; refresh when the index changes.
+    this.disposables.push(
+      manager.onDidChange(() => codelensProvider.refresh()),
+    );
+
     const codeLensRegistration = vscode.languages.registerCodeLensProvider(
       [{ pattern: "**/BUILD" }, { pattern: "**/BUILD.bazel" }],
       codelensProvider,

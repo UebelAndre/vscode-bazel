@@ -73,7 +73,8 @@ export class WorkspaceTreeFeature extends BaseExtensionFeature {
     this.disposables.push(refreshCommand);
 
     // Register command to manually refresh the build targets: rebuilds the
-    // index, which refreshes the tree when it completes.
+    // index (and, if enabled, re-queries macro-generated targets), which
+    // refreshes the tree when it completes.
     const refreshTargetsCommand = vscode.commands.registerCommand(
       "bazel.refreshBazelBuildTargets",
       () => manager.refreshAll(),

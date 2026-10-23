@@ -110,6 +110,7 @@ export function packagePathOf(root: string, dir: string): string | undefined {
 export class WorkspaceIndex implements vscode.Disposable {
   private readonly packagesByPath = new Map<string, IndexedPackage>();
   private readonly packagesByFile = new Map<string, string>();
+  private readonly generatedByPkg = new Map<string, IndexedTarget[]>();
   private readonly bzlCache = new Map<string, CachedParse<BzlFileModel>>();
   private readonly buildCache = new Map<string, CachedParse<BuildFileModel>>();
   private moduleModel: CachedParse<ModuleFileModel> | undefined;
@@ -218,6 +219,13 @@ export class WorkspaceIndex implements vscode.Disposable {
           if (generation !== this.generation) {
             return;
           }
+        }
+      }
+      for (const pkg of this.generatedByPkg.keys()) {
+        const before = this.packagesByPath.get(pkg);
+        const after = next.get(pkg);
+        if (!before || !after || !sameStructure(before.model, after.model)) {
+          this.generatedByPkg.delete(pkg);
         }
       }
       this.packagesByPath.clear();
@@ -436,6 +444,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     if (existing && existing.file !== file) {
       this.packagesByFile.delete(existing.file);
     }
+    this.forgetGeneratedIfChanged(pkg, existing, entry);
     this.packagesByPath.set(pkg, entry);
     this.packagesByFile.set(file, pkg);
     this.sortedPackages = undefined;
@@ -477,10 +486,26 @@ export class WorkspaceIndex implements vscode.Disposable {
     if (existing && existing.file !== file) {
       this.packagesByFile.delete(existing.file);
     }
+    this.forgetGeneratedIfChanged(pkg, existing, entry);
     this.packagesByPath.set(pkg, entry);
     this.packagesByFile.set(file, pkg);
     this.sortedPackages = undefined;
     return entry;
+  }
+
+  /**
+   * Generated targets were discovered for a particular parse of the BUILD
+   * file; they stay valid while the targets and calls it defines do not
+   * change (e.g. when the file is merely opened or a comment is edited).
+   */
+  private forgetGeneratedIfChanged(
+    pkg: string,
+    previous: IndexedPackage | undefined,
+    next: IndexedPackage,
+  ) {
+    if (!previous || !sameStructure(previous.model, next.model)) {
+      this.generatedByPkg.delete(pkg);
+    }
   }
 
   /**
@@ -494,6 +519,7 @@ export class WorkspaceIndex implements vscode.Disposable {
     }
     this.packagesByFile.delete(file);
     this.packagesByPath.delete(pkg);
+    this.generatedByPkg.delete(pkg);
     this.sortedPackages = undefined;
     for (const name of BUILD_FILE_NAMES) {
       const sibling = path.join(path.dirname(file), name);
@@ -516,6 +542,7 @@ export class WorkspaceIndex implements vscode.Disposable {
       if (file.startsWith(prefix)) {
         this.packagesByFile.delete(file);
         this.packagesByPath.delete(pkg);
+        this.generatedByPkg.delete(pkg);
         pkgs.push(pkg);
       }
     }
@@ -572,9 +599,15 @@ export class WorkspaceIndex implements vscode.Disposable {
     return pkg === undefined ? undefined : this.packagesByPath.get(pkg);
   }
 
-  /** Returns the targets of a package. */
+  /**
+   * Returns the targets of a package, including macro-generated targets
+   * discovered through Bazel when available.
+   */
   public getTargets(pkg: string): IndexedTarget[] {
-    return this.packagesByPath.get(pkg)?.model.targets ?? [];
+    const entry = this.packagesByPath.get(pkg);
+    const parsed = entry ? entry.model.targets : [];
+    const generated = this.generatedByPkg.get(pkg);
+    return generated ? parsed.concat(generated) : parsed;
   }
 
   public findTarget(pkg: string, name: string): IndexedTarget | undefined {
@@ -591,6 +624,72 @@ export class WorkspaceIndex implements vscode.Disposable {
   /** Number of indexed packages. */
   public get packageCount(): number {
     return this.packagesByPath.size;
+  }
+
+  // -----------------------------------------------------------------------
+  // Macro-generated targets
+
+  /**
+   * Replaces all generated targets with the given set, grouped by package.
+   * Only packages whose generated targets actually changed are announced.
+   */
+  public setGeneratedTargets(byPkg: Map<string, IndexedTarget[]>) {
+    const changed: string[] = [];
+    for (const pkg of new Set([
+      ...this.generatedByPkg.keys(),
+      ...byPkg.keys(),
+    ])) {
+      const before = this.generatedByPkg.get(pkg) ?? [];
+      const after = byPkg.get(pkg) ?? [];
+      if (!sameTargets(before, after)) {
+        changed.push(pkg);
+      }
+    }
+    this.generatedByPkg.clear();
+    for (const [pkg, targets] of byPkg) {
+      if (targets.length) {
+        this.generatedByPkg.set(pkg, targets);
+      }
+    }
+    if (changed.length) {
+      this.onDidChangeEmitter.fire({ root: this.root, pkgs: changed });
+    }
+  }
+
+  /** Replaces the generated targets of one package. */
+  public setGeneratedTargetsForPackage(pkg: string, targets: IndexedTarget[]) {
+    if (sameTargets(this.generatedByPkg.get(pkg) ?? [], targets)) {
+      return;
+    }
+    if (targets.length) {
+      this.generatedByPkg.set(pkg, targets);
+    } else {
+      this.generatedByPkg.delete(pkg);
+    }
+    this.onDidChangeEmitter.fire({ root: this.root, pkgs: [pkg] });
+  }
+
+  /**
+   * Whether a package calls anything that may create targets the parser
+   * cannot see: a loaded symbol (possibly a macro) or a call whose name is
+   * computed.
+   */
+  public mayCallMacros(pkg: string): boolean {
+    const model = this.packagesByPath.get(pkg)?.model;
+    if (!model) {
+      return false;
+    }
+    if (model.calls.some((c) => c.dynamic)) {
+      return true;
+    }
+    const loaded = new Set(
+      model.loads.flatMap((l) => l.symbols.map((sym) => sym.local)),
+    );
+    const isLoaded = (callee: string) => loaded.has(callee.split(".")[0]);
+    return (
+      model.targets.some((t) => isLoaded(t.kind)) ||
+      model.calls.some((c) => isLoaded(c.callee))
+    );
   }
 
   // -----------------------------------------------------------------------
@@ -691,6 +790,29 @@ export function toVsRange(range: SourceRange): vscode.Range {
     range.start.character,
     range.end.line,
     range.end.character,
+  );
+}
+
+/** Whether two parses define the same targets and calls, positions aside. */
+function sameStructure(a: BuildFileModel, b: BuildFileModel): boolean {
+  return (
+    a.targets.length === b.targets.length &&
+    a.calls.length === b.calls.length &&
+    a.targets.every(
+      (t, i) => t.name === b.targets[i].name && t.kind === b.targets[i].kind,
+    ) &&
+    a.calls.every(
+      (c, i) =>
+        c.callee === b.calls[i].callee && c.dynamic === b.calls[i].dynamic,
+    )
+  );
+}
+
+/** Whether two lists of generated targets are the same. */
+function sameTargets(a: IndexedTarget[], b: IndexedTarget[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((t, i) => t.label === b[i].label && t.kind === b[i].kind)
   );
 }
 
