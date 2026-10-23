@@ -16,9 +16,6 @@ import * as vscode from "vscode";
 import * as lc from "vscode-languageclient/node";
 
 import { BaseExtensionFeature } from "../extension/extension_feature";
-import { BazelCompletionItemProvider } from "../completion-provider";
-import { BazelGotoDefinitionProvider } from "../definition/bazel_goto_definition_provider";
-import { StarlarkSymbolProvider } from "./starlark_symbol_provider";
 import { IndexManager } from "../index";
 import {
   startLspClientFromCurrentConfig,
@@ -29,12 +26,28 @@ import {
   getLspServerExecutablePath,
   getLspWasmPath,
 } from "../extension/configuration";
+import {
+  DocumentCache,
+  StarlarkDefinitionProvider,
+} from "./starlark_definition_provider";
+import { StarlarkCompletionProvider } from "./starlark_completion_provider";
+import { StarlarkHoverProvider } from "./starlark_hover_provider";
+import { StarlarkSymbolProvider } from "./starlark_symbol_provider";
 import { RepositoryDiagnostics } from "./repository_diagnostics";
+
+/** Documents the built-in providers apply to. */
+export const STARLARK_SELECTOR: vscode.DocumentSelector = [
+  { scheme: "file", language: "starlark" },
+  { scheme: "file", pattern: "**/BUILD" },
+  { scheme: "file", pattern: "**/BUILD.bazel" },
+  { scheme: "file", pattern: "**/*.bzl" },
+];
 
 /**
  * Language Support feature for Bazel.
- * Handles both external LSP and built-in language support implementations.
- * Automatically chooses implementation based on LSP configuration.
+ *
+ * Uses an external language server when one is configured, otherwise the
+ * built-in providers backed by the workspace index.
  */
 export class LanguageSupportFeature extends BaseExtensionFeature {
   private lspClient: lc.LanguageClient | undefined;
@@ -46,7 +59,6 @@ export class LanguageSupportFeature extends BaseExtensionFeature {
   private enableGeneration = 0;
   /** Built-in providers registered because no bundled server started. */
   private fallbackProviders: vscode.Disposable[] = [];
-  private completionItemProvider: BazelCompletionItemProvider | null = null;
   private isUsingExternalLSP: boolean = false;
 
   constructor(context: vscode.ExtensionContext) {
@@ -65,7 +77,7 @@ export class LanguageSupportFeature extends BaseExtensionFeature {
       ? this.enableExternalLSP(context)
       : wasm
         ? this.enableWasmLSP(context, wasm)
-        : this.enableBuiltInSupport(context);
+        : this.enableBuiltInSupport();
     if (enabled) {
       // Lint-style warnings are independent of which server answers
       // language queries.
@@ -169,7 +181,7 @@ export class LanguageSupportFeature extends BaseExtensionFeature {
     vscode.commands.executeCommand("setContext", "bazel.lsp.enabled", false);
     this.isUsingExternalLSP = false;
     const before = this.disposables.length;
-    this.enableBuiltInSupport(context);
+    this.enableBuiltInSupport();
     this.fallbackProviders = this.disposables.splice(before);
   }
 
@@ -179,7 +191,6 @@ export class LanguageSupportFeature extends BaseExtensionFeature {
       disposable.dispose();
     }
     this.fallbackProviders = [];
-    this.completionItemProvider = null;
     this.isUsingExternalLSP = true;
     vscode.commands.executeCommand("setContext", "bazel.lsp.enabled", true);
   }
@@ -204,9 +215,6 @@ export class LanguageSupportFeature extends BaseExtensionFeature {
     }
     this.wasmClients = [];
 
-    this.completionItemProvider = null;
-
-    // Clear context key for use in package.json
     vscode.commands.executeCommand("setContext", "bazel.lsp.enabled", false);
 
     return super.disable();
@@ -218,7 +226,6 @@ export class LanguageSupportFeature extends BaseExtensionFeature {
   private enableExternalLSP(context: vscode.ExtensionContext): boolean {
     this.logInfo("Enabling external language server support");
 
-    // Register restart command
     const restartCommand = vscode.commands.registerCommand(
       "bazel.lsp.restart",
       async () => {
@@ -228,7 +235,6 @@ export class LanguageSupportFeature extends BaseExtensionFeature {
     );
     this.disposables.push(restartCommand);
 
-    // Start the LSP client
     startLspClientFromCurrentConfig(this.lspClient, context)
       .then(() => {
         this.logInfo("External language server started successfully");
@@ -238,76 +244,52 @@ export class LanguageSupportFeature extends BaseExtensionFeature {
         return false;
       });
 
-    // Set context key for use in package.json
     vscode.commands.executeCommand("setContext", "bazel.lsp.enabled", true);
 
     return true;
   }
 
   /**
-   * Enables built-in language support implementation
+   * Enables the built-in, index-backed language providers.
    */
-  private enableBuiltInSupport(context: vscode.ExtensionContext): boolean {
-    this.logInfo("Enabling built-in language support");
-
-    // Create completion provider
-    this.completionItemProvider = new BazelCompletionItemProvider();
-    this.completionItemProvider.scheduleRefresh();
-
-    // Set up file watcher for BUILD files
-    const buildWatcher = vscode.workspace.createFileSystemWatcher(
-      "**/{BUILD,BUILD.bazel}",
-      false, // ignoreCreateEvents
-      false, // ignoreChangeEvents
-      false, // ignoreDeleteEvents
-    );
-
-    // Fire refresh when BUILD files change, are created, or deleted
-    const refreshOnEvent = (uri: vscode.Uri) =>
-      this.completionItemProvider?.scheduleRefresh(uri);
-    const onDidChangeDisposable = buildWatcher.onDidChange(refreshOnEvent);
-    const onDidCreateDisposable = buildWatcher.onDidCreate(refreshOnEvent);
-    const onDidDeleteDisposable = buildWatcher.onDidDelete(refreshOnEvent);
-
-    // Register language providers
-    const completionRegistration =
-      vscode.languages.registerCompletionItemProvider(
-        [{ pattern: "**/BUILD" }, { pattern: "**/BUILD.bazel" }],
-        this.completionItemProvider,
-        "/",
-        ":",
-      );
-
+  private enableBuiltInSupport(): boolean {
     const manager = IndexManager.get();
     if (!manager) {
       this.logError("Workspace index is not available");
       return false;
     }
-    const symbolRegistration = vscode.languages.registerDocumentSymbolProvider(
-      [
-        { scheme: "file", language: "starlark" },
-        { scheme: "file", pattern: "**/BUILD" },
-        { scheme: "file", pattern: "**/BUILD.bazel" },
-        { scheme: "file", pattern: "**/*.bzl" },
-      ],
-      new StarlarkSymbolProvider(manager),
-    );
+    this.logInfo("Enabling built-in language support");
 
-    const definitionRegistration = vscode.languages.registerDefinitionProvider(
-      [{ pattern: "**/BUILD" }, { pattern: "**/BUILD.bazel" }],
-      new BazelGotoDefinitionProvider(),
-    );
+    const resolver = manager.labels;
+    const documents = new DocumentCache();
 
-    // Add all disposables
     this.disposables.push(
-      this.completionItemProvider,
-      buildWatcher,
-      onDidChangeDisposable,
-      onDidCreateDisposable,
-      onDidDeleteDisposable,
-      completionRegistration,
-      symbolRegistration,
-      definitionRegistration,
+      vscode.languages.registerDefinitionProvider(
+        STARLARK_SELECTOR,
+        new StarlarkDefinitionProvider(
+          manager,
+          resolver,
+          documents,
+          this.getLogger(),
+        ),
+      ),
+      vscode.languages.registerHoverProvider(
+        STARLARK_SELECTOR,
+        new StarlarkHoverProvider(manager, resolver, documents),
+      ),
+      vscode.languages.registerDocumentSymbolProvider(
+        STARLARK_SELECTOR,
+        new StarlarkSymbolProvider(manager),
+      ),
+      vscode.languages.registerCompletionItemProvider(
+        STARLARK_SELECTOR,
+        new StarlarkCompletionProvider(manager, resolver),
+        "/",
+        ":",
+        "@",
+        '"',
+        "'",
+      ),
     );
 
     this.logInfo("Built-in language support enabled successfully");

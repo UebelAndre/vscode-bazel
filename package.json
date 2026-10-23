@@ -263,7 +263,7 @@
                         "type": "boolean",
                         "order": 1,
                         "default": true,
-                        "description": "Enable language support (Go To Definition, Symbols, Completion) for Bazel files. Automatically uses external LSP if configured, otherwise uses built-in completion, symbols, and go to definition."
+                        "description": "Enable language support (Go To Definition, Hover, Symbols, Completion) for Bazel files. Automatically uses the external LSP if configured, otherwise the built-in providers backed by the workspace index."
                     },
                     "bazel.languageSupport.unpinnedRepositoryWarnings": {
                         "type": "boolean",

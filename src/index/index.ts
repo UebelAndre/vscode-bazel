@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+export * from "./bindings";
 export * from "./file_models";
 export * from "./index_manager";
+export * from "./label";
+export * from "./label_resolver";
 export * from "./rule_info";
 export * from "./workspace_index";

@@ -1,0 +1,151 @@
+// Copyright 2026 The Bazel Authors. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import * as path from "path";
+import * as vscode from "vscode";
+
+import {
+  BzlDefinition,
+  IndexManager,
+  LabelResolver,
+  ResolvedLocation,
+  looksLikeLabel,
+  parseLabel,
+  shortLabel,
+} from "../index";
+import { DocumentCache } from "./starlark_definition_provider";
+import { loadBinding, nodeAt } from "./document_analysis";
+
+const MAX_DOC_LENGTH = 1500;
+
+/** Hover information for rules, macros, and labels. */
+export class StarlarkHoverProvider implements vscode.HoverProvider {
+  constructor(
+    private readonly manager: IndexManager,
+    private readonly resolver: LabelResolver,
+    private readonly documents: DocumentCache,
+  ) {}
+
+  public async provideHover(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+  ): Promise<vscode.Hover | undefined> {
+    const analyzed = this.documents.get(document);
+    const node = nodeAt(analyzed, document.offsetAt(position));
+    if (!node) {
+      return undefined;
+    }
+    const ctx = await this.resolver.contextFor(document.uri.fsPath);
+    if (!ctx) {
+      return undefined;
+    }
+    await ctx.index.ready;
+
+    if (node.kind === "ident") {
+      const name = node.ident.name;
+      const bound =
+        node.load && node.loadSymbol
+          ? { load: node.load, symbol: node.loadSymbol }
+          : loadBinding(analyzed.module, name);
+      if (!bound) {
+        return undefined;
+      }
+      const [found] = await this.resolver.resolveLoadedSymbol(
+        bound.load.module.value,
+        bound.symbol.original,
+        ctx,
+      );
+      if (!found?.definition) {
+        return undefined;
+      }
+      return new vscode.Hover(
+        definitionMarkdown(name, found, ctx.index.root),
+        new vscode.Range(
+          document.positionAt(node.ident.start),
+          document.positionAt(node.ident.end),
+        ),
+      );
+    }
+
+    if (node.load) {
+      return undefined;
+    }
+    const text = node.literal.value;
+    if (
+      !looksLikeLabel(text) ||
+      (!text.startsWith("@") && !text.startsWith("//") && !text.startsWith(":"))
+    ) {
+      return undefined;
+    }
+    const label = parseLabel(text, ctx.pkg);
+    if (!label) {
+      return undefined;
+    }
+    const locations = await this.resolver.resolveLabel(label, ctx);
+    const first = locations[0];
+    if (!first) {
+      return undefined;
+    }
+    const md = new vscode.MarkdownString();
+    if (first.target) {
+      const t = first.target;
+      md.appendCodeblock(`${t.kind}(name = "${t.name}")`, "starlark");
+      md.appendMarkdown(`${shortLabel(t.pkg, t.name)}\n\n`);
+    } else {
+      md.appendMarkdown("Source file\n\n");
+    }
+    md.appendMarkdown(fileLink(first, ctx.index.root));
+    return new vscode.Hover(
+      md,
+      new vscode.Range(
+        document.positionAt(node.literal.start),
+        document.positionAt(node.literal.end),
+      ),
+    );
+  }
+}
+
+function definitionMarkdown(
+  name: string,
+  location: ResolvedLocation,
+  root: string,
+): vscode.MarkdownString {
+  const def = location.definition as BzlDefinition;
+  const md = new vscode.MarkdownString();
+  md.isTrusted = false;
+  md.appendCodeblock(
+    def.kind === "function" ? `def ${name}(...)` : `${name} = ${def.kind}(...)`,
+    "starlark",
+  );
+  const text = def.doc?.trim();
+  if (text) {
+    md.appendMarkdown(
+      (text.length > MAX_DOC_LENGTH
+        ? text.slice(0, MAX_DOC_LENGTH) + "…"
+        : text) + "\n\n",
+    );
+  }
+  md.appendMarkdown(fileLink(location, root));
+  return md;
+}
+
+function fileLink(location: ResolvedLocation, root: string): string {
+  const fsPath = location.uri.fsPath;
+  const rel = path.relative(root, fsPath);
+  const display = rel.startsWith("..") || path.isAbsolute(rel) ? fsPath : rel;
+  const line = location.range.start.line + 1;
+  return `[${display}:${line}](${location.uri.with({
+    fragment: `L${line}`,
+  })})`;
+}
