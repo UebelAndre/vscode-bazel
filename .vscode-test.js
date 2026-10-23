@@ -1,7 +1,9 @@
 const { defineConfig } = require("@vscode/test-cli");
 
 module.exports = defineConfig({
-  files: "dist/test/**/*.test.js",
+  // Only the top-level tests run inside VS Code; test/integration/ runs
+  // under plain node (see `npm run test:integration`).
+  files: "dist/test/*.test.js",
   mocha: {
     ui: "bdd",
     timeout: 5000,

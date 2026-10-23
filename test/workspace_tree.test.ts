@@ -8,6 +8,8 @@ import { BazelQuery } from "../src/bazel";
 import { ILogger } from "../src/extension/logger";
 import { Resources } from "../src/extension/resources";
 import { blaze_query } from "../src/protos";
+import { IndexManager } from "../src/index";
+import { readyIndex, waitForIndex } from "./index_test_helpers";
 import {
   BazelWorkspaceTreeProvider,
   IBazelTreeItem,
@@ -105,8 +107,7 @@ describe("Bazel Workspace Tree", function (this: Mocha.Suite) {
         },
         "//pkg3": {
           ":custom_test  (my_test)": {},
-          ":data  (filegroup)": {},
-          ":data_gen  (filegroup)": {},
+          ":data  (my_macro)": {},
         },
       },
       await workspaceTreeProvider.getChildren(),
@@ -119,6 +120,9 @@ describe("Bazel Workspace Tree", function (this: Mocha.Suite) {
       rootBuildFilePath,
       'filegroup(name="bar",srcs=["non-pkg/bar.txt"])',
     );
+    // The index picks the new file up through the file watcher.
+    const index = await readyIndex(workspacePath);
+    await waitForIndex(index, (i) => i.getPackage("") !== undefined);
 
     // THEN
     await verifyTreeStructure(
@@ -138,8 +142,7 @@ describe("Bazel Workspace Tree", function (this: Mocha.Suite) {
         },
         "//pkg3": {
           ":custom_test  (my_test)": {},
-          ":data  (filegroup)": {},
-          ":data_gen  (filegroup)": {},
+          ":data  (my_macro)": {},
         },
         ":bar  (filegroup)": {},
       },
@@ -147,7 +150,25 @@ describe("Bazel Workspace Tree", function (this: Mocha.Suite) {
     );
   });
 
-  describe("queryExpression filtering", () => {
+  it("should remove the package when its BUILD file is deleted", async () => {
+    await fs.promises.writeFile(
+      rootBuildFilePath,
+      'filegroup(name="bar",srcs=["non-pkg/bar.txt"])',
+    );
+    const index = await readyIndex(workspacePath);
+    await waitForIndex(index, (i) => i.getPackage("") !== undefined);
+
+    await fs.promises.unlink(rootBuildFilePath);
+    await waitForIndex(index, (i) => i.getPackage("") === undefined);
+
+    const children = await workspaceTreeProvider.getChildren();
+    assert.ok(
+      !children.some((c) => c.getLabel() === ":bar  (filegroup)"),
+      "root target should be gone",
+    );
+  });
+
+  describe("queryExpression scoping", () => {
     afterEach(async () => {
       await vscode.workspace
         .getConfiguration("bazel.commandLine")
@@ -158,7 +179,28 @@ describe("Bazel Workspace Tree", function (this: Mocha.Suite) {
         );
     });
 
-    it("should filter targets by rule kind", async () => {
+    it("narrows the tree to a subtree expression", async () => {
+      await vscode.workspace
+        .getConfiguration("bazel.commandLine")
+        .update(
+          "queryExpression",
+          "//pkg2/...:*",
+          vscode.ConfigurationTarget.Workspace,
+        );
+
+      await verifyTreeStructure(
+        {
+          "//pkg2": {
+            "sub-pkg": {
+              ":foobar  (filegroup)": {},
+            },
+          },
+        },
+        await workspaceTreeProvider.getChildren(),
+      );
+    });
+
+    it("ignores query functions the parser cannot evaluate", async () => {
       await vscode.workspace
         .getConfiguration("bazel.commandLine")
         .update(
@@ -167,77 +209,15 @@ describe("Bazel Workspace Tree", function (this: Mocha.Suite) {
           vscode.ConfigurationTarget.Workspace,
         );
 
-      await verifyTreeStructure(
-        {
-          "//pkg1": {
-            ":main  (py_binary)": {},
-            ":pkg1  (py_library)": {},
-          },
-        },
-        await workspaceTreeProvider.getChildren(),
+      const children = await workspaceTreeProvider.getChildren();
+      assert.deepStrictEqual(
+        children.map((c) => c.getLabel()),
+        ["//buildifier", "//nested_module", "//pkg1", "//pkg2", "//pkg3"],
       );
-    });
-
-    it("should filter to filegroup targets only", async () => {
-      await vscode.workspace
-        .getConfiguration("bazel.commandLine")
-        .update(
-          "queryExpression",
-          "kind('filegroup', //...)",
-          vscode.ConfigurationTarget.Workspace,
-        );
-
-      await verifyTreeStructure(
-        {
-          "//pkg1": {
-            ":foo  (filegroup)": {},
-            ":src_files  (filegroup)": {},
-          },
-          "//pkg2/sub-pkg": {
-            ":foobar  (filegroup)": {},
-          },
-          "//pkg3": {
-            ":data  (filegroup)": {},
-            ":data_gen  (filegroup)": {},
-          },
-        },
-        await workspaceTreeProvider.getChildren(),
-      );
-    });
-
-    it("should filter to a single target", async () => {
-      await vscode.workspace
-        .getConfiguration("bazel.commandLine")
-        .update(
-          "queryExpression",
-          "//pkg1:main",
-          vscode.ConfigurationTarget.Workspace,
-        );
-
-      await verifyTreeStructure(
-        {
-          "//pkg1": {
-            ":main  (py_binary)": {},
-          },
-        },
-        await workspaceTreeProvider.getChildren(),
-      );
-    });
-
-    it("should show empty tree when expression matches nothing", async () => {
-      await vscode.workspace
-        .getConfiguration("bazel.commandLine")
-        .update(
-          "queryExpression",
-          "kind('java_library', //...)",
-          vscode.ConfigurationTarget.Workspace,
-        );
-
-      await verifyTreeStructure({}, await workspaceTreeProvider.getChildren());
     });
   });
 
-  it("queries a Bazel root nested below the VS Code folder", async () => {
+  it("indexes a nested Bazel root without querying", async () => {
     await vscode.workspace
       .getConfiguration("bazel.workspace")
       .update("path", "nested_module", vscode.ConfigurationTarget.Workspace);
@@ -255,36 +235,29 @@ describe("Bazel Workspace Tree", function (this: Mocha.Suite) {
       logWarn: sandbox.stub(),
       logError: sandbox.stub(),
     };
+    const manager = IndexManager.get()!;
     const provider = new BazelWorkspaceTreeProvider(
       new Resources(extensionPath),
       logger,
+      manager,
     );
 
     try {
-      await provider.getChildren();
-
       const configuredRoot = path.join(workspacePath, "nested_module");
+      const index = await readyIndex(configuredRoot);
+      const children = await provider.getChildren();
+
       assert.strictEqual(provider.workspaceFolderTreeItems?.length, 1);
       assert.strictEqual(
         provider.workspaceFolderTreeItems?.[0].getWorkspaceInfo()
           .bazelWorkspacePath,
         configuredRoot,
       );
-      assert.strictEqual(queryPackages.callCount, 1);
-      assert.strictEqual(queryTargets.callCount, 1);
-      assert.strictEqual(queryPackages.firstCall.args[0], "...:*");
-      assert.strictEqual(
-        queryTargets.firstCall.args[0],
-        "(...:*) intersect (:all)",
-      );
-      assert.strictEqual(
-        queryPackages.firstCall.thisValue.workingDirectory,
-        configuredRoot,
-      );
-      assert.strictEqual(
-        queryTargets.firstCall.thisValue.workingDirectory,
-        configuredRoot,
-      );
+      // The nested module's BUILD file is empty: one package, no targets.
+      assert.deepStrictEqual(index.getPackages(), [""]);
+      assert.deepStrictEqual(children, []);
+      assert.strictEqual(queryPackages.callCount, 0);
+      assert.strictEqual(queryTargets.callCount, 0);
     } finally {
       provider.dispose();
       sandbox.restore();

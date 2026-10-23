@@ -24,6 +24,8 @@ import {
   BUILD_FILE_CHANGE_DELAY_MS,
   CoalescingRunner,
 } from "../extension/coalescing_runner";
+import { getIndexScopePrefix } from "../extension/configuration";
+import { IndexChange, IndexManager } from "../index";
 
 /**
  * Provides a tree of Bazel build packages and targets for the VS Code explorer
@@ -48,7 +50,7 @@ export class BazelWorkspaceTreeProvider
   // For testing, keep track of last revealed tree item
   public lastRevealedTreeItem: IBazelTreeItem | undefined = undefined;
 
-  // Debounces refreshes during bulk BUILD file changes like git checkout
+  // Coalesces bursts of index changes (e.g. git checkout) into one refresh
   private readonly refreshRunner = new CoalescingRunner(
     BUILD_FILE_CHANGE_DELAY_MS,
     () => this.refresh(),
@@ -64,22 +66,12 @@ export class BazelWorkspaceTreeProvider
   constructor(
     private readonly resources: Resources,
     private readonly logger: ILogger,
+    private readonly manager: IndexManager,
   ) {
     this.logger.logInfo("Initializing BazelWorkspaceTreeProvider");
 
-    const buildFilesWatcher = vscode.workspace.createFileSystemWatcher(
-      "**/{BUILD,BUILD.bazel}",
-      false,
-      false,
-      false,
-    );
-
     this.disposables.push(
-      this.refreshRunner,
-      buildFilesWatcher,
-      buildFilesWatcher.onDidChange(() => this.refreshRunner.schedule()),
-      buildFilesWatcher.onDidCreate(() => this.refreshRunner.schedule()),
-      buildFilesWatcher.onDidDelete(() => this.refreshRunner.schedule()),
+      this.manager.onDidChange((change) => this.onIndexChanged(change)),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.refresh()),
       vscode.window.onDidChangeActiveTextEditor(() =>
         this.syncSelectedTreeItem(),
@@ -171,6 +163,45 @@ export class BazelWorkspaceTreeProvider
   }
 
   /**
+   * Reacts to index changes. Changes confined to known packages refresh just
+   * those items so that the tree keeps its expansion state; anything else
+   * (new or removed packages, full rebuilds) refreshes the whole tree.
+   */
+  private onIndexChanged(change: IndexChange): void {
+    if (!change.pkgs || !this.workspaceFolderTreeItems) {
+      this.queueRefresh();
+      return;
+    }
+    const folders = this.workspaceFolderTreeItems.filter(
+      (folder) => folder.getWorkspaceInfo().bazelWorkspacePath === change.root,
+    );
+    if (folders.length === 0) {
+      // An index the tree does not show, e.g. an ignored sub-workspace.
+      return;
+    }
+    const index = this.manager.getIndex(change.root);
+    const scope = getIndexScopePrefix();
+    for (const pkg of change.pkgs) {
+      const exists = index?.getPackage(pkg) !== undefined;
+      for (const folder of folders) {
+        const item = folder.getPackageTreeItem(pkg);
+        if (item && exists) {
+          this.onDidChangeTreeDataEmitter.fire(item);
+        } else if (item || (exists && inScope(pkg, scope))) {
+          // A package appeared or disappeared: the structure changed.
+          this.queueRefresh();
+          return;
+        }
+      }
+    }
+  }
+
+  /** Refreshes the whole tree once the current burst of changes settles. */
+  private queueRefresh(): void {
+    this.refreshRunner.schedule();
+  }
+
+  /**
    * Checks if the tree view is currently visible.
    * Used for lazy loading to avoid unnecessary refreshes.
    */
@@ -196,6 +227,7 @@ export class BazelWorkspaceTreeProvider
             return new BazelWorkspaceFolderTreeItem(
               this.resources,
               workspaceInfo,
+              this.manager,
             );
           }
           this.logger.logDebug(
@@ -217,6 +249,7 @@ export class BazelWorkspaceTreeProvider
   }
 
   public dispose() {
+    this.refreshRunner.dispose();
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
@@ -353,4 +386,9 @@ export class BazelWorkspaceTreeProvider
       this.logger.logError("Error syncing selected tree item", false, error);
     }
   }
+}
+
+/** Whether a package falls under the configured scope prefix. */
+function inScope(pkg: string, scope: string | undefined): boolean {
+  return scope === undefined || pkg === scope || pkg.startsWith(`${scope}/`);
 }

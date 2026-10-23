@@ -14,16 +14,8 @@
 
 import * as vscode from "vscode";
 import { BazelWorkspaceInfo } from "../bazel";
-import {
-  BazelQuery,
-  IBazelCommandAdapter,
-  IBazelCommandOptions,
-} from "../bazel";
-import {
-  getBazelExecutablePath,
-  getQueryExpression,
-} from "../extension/configuration";
-import { blaze_query } from "../protos";
+import { IBazelCommandAdapter, IBazelCommandOptions } from "../bazel";
+import { WorkspaceIndex, ruleInfoFor } from "../index";
 import { BazelTargetTreeItem } from "./bazel_target_tree_item";
 import { IBazelTreeItem } from "./bazel_tree_item";
 import { Resources } from "../extension/resources";
@@ -43,12 +35,14 @@ export class BazelPackageTreeItem
    *
    * @param resources The resources for the extension.
    * @param workspaceInfo The workspace information.
+   * @param index The workspace index providing the package's targets.
    * @param parent The parent tree item of this item.
    * @param packagePath The path to the build package that this item represents.
    */
   constructor(
     private readonly resources: Resources,
     private readonly workspaceInfo: BazelWorkspaceInfo,
+    private readonly index: WorkspaceIndex,
     private readonly parent: IBazelTreeItem,
     private readonly packagePath: string,
   ) {}
@@ -57,25 +51,17 @@ export class BazelPackageTreeItem
     return true;
   }
 
-  public async getChildren(): Promise<IBazelTreeItem[]> {
-    const queryExpression = getQueryExpression();
-    const targetQuery = `(${queryExpression}) intersect (//${this.packagePath}:all)`;
-    const queryResult = await new BazelQuery(
-      getBazelExecutablePath(),
-      this.workspaceInfo.bazelWorkspacePath,
-    ).queryTargets(targetQuery, {
-      ignoresErrors: true,
-      sortByRuleName: true,
-    });
-    const targets = queryResult.target.map((target: blaze_query.ITarget) => {
-      return new BazelTargetTreeItem(
-        this.resources,
-        this.workspaceInfo,
-        this,
-        target,
-      );
-    });
-    return (this.directSubpackages as IBazelTreeItem[]).concat(targets);
+  public getChildren(): Promise<IBazelTreeItem[]> {
+    const targets = targetTreeItems(
+      this.resources,
+      this.workspaceInfo,
+      this.index,
+      this,
+      this.packagePath,
+    );
+    return Promise.resolve(
+      (this.directSubpackages as IBazelTreeItem[]).concat(targets),
+    );
   }
 
   public getParent(): vscode.ProviderResult<IBazelTreeItem> {
@@ -121,4 +107,26 @@ export class BazelPackageTreeItem
   public getPackagePath(): string {
     return this.packagePath;
   }
+}
+
+/** Creates the target items of a package, sorted by name. */
+export function targetTreeItems(
+  resources: Resources,
+  workspaceInfo: BazelWorkspaceInfo,
+  index: WorkspaceIndex,
+  parent: IBazelTreeItem,
+  packagePath: string,
+): BazelTargetTreeItem[] {
+  return [...index.getTargets(packagePath)]
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map(
+      (target) =>
+        new BazelTargetTreeItem(
+          resources,
+          workspaceInfo,
+          parent,
+          target,
+          ruleInfoFor(target),
+        ),
+    );
 }

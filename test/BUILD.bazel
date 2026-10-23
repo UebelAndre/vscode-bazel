@@ -9,6 +9,7 @@ load("@aspect_rules_ts//ts:defs.bzl", "ts_config", "ts_project")
 load("@bazel_lib//lib:copy_file.bzl", "copy_file")
 load("@bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@bazel_lib//lib:write_source_files.bzl", "write_source_file")
+load("@vscode_bazel_npm//:mocha/package_json.bzl", mocha_bin = "bin")
 load("@vscode_bazel_npm//:vscode-tmgrammar-test/package_json.bzl", tmgrammar_bin = "bin")
 
 package(default_visibility = ["//visibility:private"])
@@ -62,6 +63,8 @@ js_library(
     srcs = glob([
         "*.js",
         "*.ts",
+        "integration/*.js",
+        "integration/*.ts",
         "lcov/*.md",
     ]),
     visibility = ["//:__pkg__"],
@@ -105,7 +108,10 @@ ts_config(
 # //:tsc emits next to the sources in bazel-out.
 ts_project(
     name = "tsc",
-    srcs = glob(["*.ts"]),
+    srcs = glob([
+        "*.ts",
+        "integration/*.test.ts",
+    ]),
     allow_js = True,
     composite = True,
     declaration = True,
@@ -186,6 +192,43 @@ js_test(
         "PATH",
         "WAYLAND_DISPLAY",
         "XAUTHORITY",
+    ],
+    tags = [
+        "no-sandbox",
+        "requires-network",
+    ],
+)
+
+# Bazel-in-the-loop tests for the workspace index (parity with bazel query,
+# the macro-generated target overlay, external repository resolution).
+# They run under plain node with a stub of the VS Code API, copy the fixture
+# workspace to a temporary directory and drive the host's bazel there, so
+# they need neither a display nor the sandbox.
+js_library(
+    name = "index_integration_support",
+    srcs = [
+        "integration/hook_vscode.js",
+        "integration/vscode_stub.js",
+    ],
+)
+
+mocha_bin.mocha_test(
+    name = "index_integration",
+    size = "large",
+    args = [
+        "--require",
+        "test/integration/hook_vscode.js",
+        "--timeout",
+        "900000",
+        "test/integration/bazel_index.test.js",
+    ],
+    data = [
+        ":bazel_workspace_fixture",
+        ":index_integration_support",
+        ":tsc",
+        "//:node_modules",
+        "//:protos_lib",
+        "//:tsc",
     ],
     tags = [
         "no-sandbox",

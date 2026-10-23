@@ -27,8 +27,8 @@ This extension provides support for Bazel in Visual Studio.
 ## How targets are discovered
 
 The extension discovers packages and targets by parsing `BUILD` and `.bzl`
-files itself rather than by running `bazel query`. This keeps the outline and
-CodeLens instant, reflects unsaved edits immediately, and never takes the
+files itself rather than by running `bazel query`. This keeps the **Bazel
+Targets** tree, outline and CodeLens instant, reflects unsaved edits immediately, and never takes the
 Bazel server lock, so a running `bazel build` in a terminal is not blocked by
 the editor (and vice versa). Unnamed macro calls, calls whose `name` is
 computed, and syntax errors never break discovery: the affected call is

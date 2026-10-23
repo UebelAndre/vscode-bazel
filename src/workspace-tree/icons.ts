@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import { IconName } from "../extension/resources";
-import { blaze_query } from "../protos";
 
 /**
  * Icons to use for specific rule classes.
@@ -55,12 +54,9 @@ const SPECIFIC_RULE_CLASS_ICONS: Record<string, IconName> = {
  * Returns a string or {@code vscode.ThemeIcon} representing the icon to display
  * for the given build target.
  *
- * @param rule The {@code QueriedRule} representing the build target.
+ * @param ruleClass The rule class (or macro name) of the build target.
  */
-export function getBazelRuleIcon(
-  target: blaze_query.ITarget,
-): IconName | undefined {
-  const ruleClass = target.rule?.ruleClass ?? "";
+export function getBazelRuleIcon(ruleClass: string): IconName | undefined {
   const iconName = SPECIFIC_RULE_CLASS_ICONS[ruleClass];
   if (iconName) {
     return iconName;

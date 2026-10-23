@@ -13,19 +13,14 @@
 // limitations under the License.
 
 import * as vscode from "vscode";
-import {
-  BazelWorkspaceInfo,
-  BazelQuery,
-  getBazelWorkspaceRelativePath,
-} from "../bazel";
-import {
-  getBazelExecutablePath,
-  getQueryExpression,
-} from "../extension/configuration";
+import { BazelWorkspaceInfo, getBazelWorkspaceRelativePath } from "../bazel";
+import { getIndexScopePrefix } from "../extension/configuration";
 import { logError } from "../extension/logger";
-import { blaze_query } from "../protos";
-import { BazelPackageTreeItem } from "./bazel_package_tree_item";
-import { BazelTargetTreeItem } from "./bazel_target_tree_item";
+import { IndexManager, WorkspaceIndex } from "../index";
+import {
+  BazelPackageTreeItem,
+  targetTreeItems,
+} from "./bazel_package_tree_item";
 import { IBazelTreeItem } from "./bazel_tree_item";
 import { Resources } from "../extension/resources";
 
@@ -43,10 +38,12 @@ export class BazelWorkspaceFolderTreeItem implements IBazelTreeItem {
    *
    * @param resources The resources for the extension.
    * @param workspaceInfo The workspace information for the Bazel project.
+   * @param manager The index manager providing packages and targets.
    */
   constructor(
     private readonly resources: Resources,
     private readonly workspaceInfo: BazelWorkspaceInfo,
+    private readonly manager: IndexManager,
   ) {}
 
   public mightHaveChildren(): boolean {
@@ -106,12 +103,19 @@ export class BazelWorkspaceFolderTreeItem implements IBazelTreeItem {
     );
   }
 
+  /** Finds the tree item for an exact package path, if it was created. */
+  public getPackageTreeItem(
+    packagePath: string,
+  ): BazelPackageTreeItem | undefined {
+    return this.sortedPackageTreeItems.find(
+      (pkg) => pkg.getPackagePath() === packagePath,
+    );
+  }
+
   /**
-   * Recursively creates the tree items that represent packages found in a Bazel
-   * query.
+   * Recursively creates the tree items that represent packages.
    *
-   * @param packagePaths The array of package paths that were found under the
-   * folder in which the Bazel query was executed.
+   * @param packagePaths The sorted array of package paths under the folder.
    * @param startIndex The starting index within the package paths where common
    * prefixes should be searched.
    * @param endIndex The ending index (exclusive) within the package paths where
@@ -122,6 +126,7 @@ export class BazelWorkspaceFolderTreeItem implements IBazelTreeItem {
    * which is used to trim the package prefix from labels in the tree items.
    */
   private buildPackageTree(
+    index: WorkspaceIndex,
     packagePaths: string[],
     startIndex: number,
     endIndex: number,
@@ -172,11 +177,13 @@ export class BazelWorkspaceFolderTreeItem implements IBazelTreeItem {
       const item = new BazelPackageTreeItem(
         this.resources,
         this.workspaceInfo,
+        index,
         parent,
         packagePath,
       );
       treeItems.push(item);
       this.buildPackageTree(
+        index,
         packagePaths,
         groupStart + 1,
         groupEnd,
@@ -194,13 +201,9 @@ export class BazelWorkspaceFolderTreeItem implements IBazelTreeItem {
    * Returns a promise for an array of tree items representing build items.
    */
   private async getDirectoryItems(): Promise<IBazelTreeItem[]> {
-    // Retrieve the list of all packages underneath the current workspace
-    // folder. Note that if the workspace folder is not the root of a Bazel
-    // workspace but is instead a folder underneath it, we query for *only* the
-    // packages under that folder (including the folder itself). This lets us
-    // have a VS Code workspace that is pointed at a subpackage of a large
-    // workspace without the performance penalty of querying the entire
-    // workspace.
+    // If the workspace folder is not the root of a Bazel workspace but is
+    // instead a folder underneath it, we show *only* the packages under that
+    // folder (including the folder itself).
     if (!this.workspaceInfo || !this.workspaceInfo.workspaceFolder) {
       return Promise.resolve([]);
     }
@@ -227,23 +230,28 @@ export class BazelWorkspaceFolderTreeItem implements IBazelTreeItem {
       relativePath = "";
     }
 
-    const queryExpression = getQueryExpression();
-    // When the VS Code folder is a subdirectory of the Bazel workspace,
-    // `intersect` scopes the user's query to only packages under that
-    // subdirectory (//${relativePath}/...:*), and `except` removes the
-    // folder's own direct targets (//${relativePath}:*) so we only get
-    // sub-packages for the tree — direct targets are fetched separately below.
-    const packageQuery = relativePath
-      ? `((${queryExpression}) intersect (//${relativePath}/...:*)) except (//${relativePath}:*)`
-      : queryExpression;
+    const index = this.manager.getIndexForWorkspace(this.workspaceInfo);
+    await index.ready;
 
-    const packagePaths = await new BazelQuery(
-      getBazelExecutablePath(),
-      bazelWorkspacePath,
-    ).queryPackages(packageQuery);
+    const scope = getIndexScopePrefix();
+    const inScope = (pkg: string, prefix: string | undefined) =>
+      prefix === undefined ||
+      prefix === "" ||
+      pkg === prefix ||
+      pkg.startsWith(`${prefix}/`);
+
+    const packagePaths = index
+      .getPackages()
+      .filter(
+        (pkg) =>
+          pkg !== relativePath &&
+          inScope(pkg, relativePath) &&
+          inScope(pkg, scope),
+      );
 
     const topLevelItems: BazelPackageTreeItem[] = [];
     this.buildPackageTree(
+      index,
       packagePaths,
       0,
       packagePaths.length,
@@ -251,28 +259,16 @@ export class BazelWorkspaceFolderTreeItem implements IBazelTreeItem {
       this,
     );
 
-    // Now collect any targets in the directory also (this can fail since
-    // there might not be a BUILD files at this level (but down levels)).
-    // Intersect the user's query with the directory-level target query so
-    // only targets that satisfy both the user's filter and belong to this
-    // directory are shown (e.g. the user may restrict to certain rule kinds).
-    const scopedTargetQuery = relativePath ? `//${relativePath}:all` : `:all`;
-    const targetQuery = `(${queryExpression}) intersect (${scopedTargetQuery})`;
-    const queryResult = await new BazelQuery(
-      getBazelExecutablePath(),
-      bazelWorkspacePath,
-    ).queryTargets(targetQuery, {
-      ignoresErrors: true,
-      sortByRuleName: true,
-    });
-    const targets = queryResult.target.map((target: blaze_query.ITarget) => {
-      return new BazelTargetTreeItem(
-        this.resources,
-        this.workspaceInfo,
-        this,
-        target,
-      );
-    });
+    // Now collect any targets in the folder's own package, if it is one.
+    const targets = inScope(relativePath, scope)
+      ? targetTreeItems(
+          this.resources,
+          this.workspaceInfo,
+          index,
+          this,
+          relativePath,
+        )
+      : [];
 
     // Cache all packages after building the tree
     this.collectAndSortPackageTreeItems(topLevelItems);
