@@ -12,7 +12,7 @@
 # leaves the files visible to glob() from the enclosing //test package
 # so we can stage them into the vscode-test runtime tree. A new fixture
 # package that is missing here fails loudly: Bazel tries to load it.
-common --deleted_packages=test/bazel_workspace/pkg1,test/bazel_workspace/pkg2,test/bazel_workspace/pkg2/sub-pkg,test/bazel_workspace/buildifier,test/bazel_workspace/nested_module
+common --deleted_packages=test/bazel_workspace/pkg1,test/bazel_workspace/pkg2,test/bazel_workspace/pkg2/sub-pkg,test/bazel_workspace/buildifier,test/bazel_workspace/nested_module,test/bazel_workspace/pkg3
 
 # Keep host environment out of actions so the build is reproducible across
 # machines that may or may not have Node/npm installed on PATH.

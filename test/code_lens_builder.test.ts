@@ -1,8 +1,11 @@
 import * as vscode from "vscode";
 import * as assert from "assert";
-import { CodeLensBuilder } from "../src/codelens/code_lens_builder";
+import {
+  CodeLensBuilder,
+  CodeLensTarget,
+} from "../src/codelens/code_lens_builder";
 import { BazelWorkspaceInfo, IBazelCommandAdapter } from "../src/bazel";
-import { blaze_query } from "../src/protos";
+import { heuristicRuleInfo } from "../src/index";
 
 // Group lenses by target line number for easier assertions
 interface LensInfo {
@@ -17,14 +20,15 @@ function createMockTarget(
   name: string,
   ruleClass: string,
   line: number,
-): blaze_query.Target {
+): CodeLensTarget {
+  const info = heuristicRuleInfo(ruleClass);
   return {
-    rule: {
-      name,
-      ruleClass,
-      location: `path/to/file:${line}:1`,
-    },
-  } as blaze_query.Target;
+    label: name,
+    // The builder works with 0-based lines; tests below use 1-based ones.
+    line: line - 1,
+    isTest: info.isTest,
+    isExecutable: info.isExecutable,
+  };
 }
 
 function groupLensesByLine(lenses: vscode.CodeLens[]): Map<number, LensInfo[]> {
@@ -76,25 +80,23 @@ describe("CodeLensBuilder", () => {
     // 1. Different target types (binary, library, test)
     // 2. Multiple targets with the same rule type
     // 3. Targets on the same line (testing command ordering by target name length)
-    const queryResult = {
-      target: [
-        // Binary target (line 1)
-        createMockTarget("//foo:app", "cc_binary", 1),
-        // Library targets (lines 5 and 10)
-        createMockTarget("//foo:lib1", "cc_library", 5),
-        createMockTarget("//foo:lib2", "cc_library", 10),
-        // Test targets (lines 15 and 20)
-        createMockTarget("//foo:test1", "cc_test", 15),
-        createMockTarget("//foo:test2", "cc_test", 20),
-        // Multiple targets on the same line (line 25)
-        createMockTarget("//foo:abc_helper", "cc_library", 25),
-        createMockTarget("//foo:helper_abc", "cc_library", 25),
-        createMockTarget("//foo:test", "cc_test", 25),
-      ],
-    } as unknown as blaze_query.QueryResult;
+    const targets: CodeLensTarget[] = [
+      // Binary target (line 1)
+      createMockTarget("//foo:app", "cc_binary", 1),
+      // Library targets (lines 5 and 10)
+      createMockTarget("//foo:lib1", "cc_library", 5),
+      createMockTarget("//foo:lib2", "cc_library", 10),
+      // Test targets (lines 15 and 20)
+      createMockTarget("//foo:test1", "cc_test", 15),
+      createMockTarget("//foo:test2", "cc_test", 20),
+      // Multiple targets on the same line (line 25)
+      createMockTarget("//foo:abc_helper", "cc_library", 25),
+      createMockTarget("//foo:helper_abc", "cc_library", 25),
+      createMockTarget("//foo:test", "cc_test", 25),
+    ];
 
     // WHEN
-    const lenses = builder.buildCodeLenses(workspaceInfo, queryResult);
+    const lenses = builder.buildCodeLenses(workspaceInfo, targets);
     const lensesByLine = groupLensesByLine(lenses);
 
     // THEN

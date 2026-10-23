@@ -24,6 +24,16 @@ This extension provides support for Bazel in Visual Studio.
   through code, inspect variables, etc.)
 - **URI handler** to go to targets from outside of VSCode. (Example: vscode://bazelbuild.vscode-bazel//path/to/tests:target)
 
+## How targets are discovered
+
+The extension discovers packages and targets by parsing `BUILD` and `.bzl`
+files itself rather than by running `bazel query`. This keeps the outline and
+CodeLens instant, reflects unsaved edits immediately, and never takes the
+Bazel server lock, so a running `bazel build` in a terminal is not blocked by
+the editor (and vice versa). Unnamed macro calls, calls whose `name` is
+computed, and syntax errors never break discovery: the affected call is
+skipped and the rest of the file is still indexed.
+
 ## Configuring the Extension
 
 This extension adds a **Bazel** section to the extension settings in Visual

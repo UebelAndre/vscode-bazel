@@ -15,10 +15,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { blaze_query } from "../protos";
 import { getPathsToIgnore, getWorkspacePath } from "../extension/configuration";
 import { logError } from "../extension/logger";
-import { BazelQuery } from "./bazel_query";
 
 /**
  * Get the package label for a build file.
@@ -74,28 +72,6 @@ export function canonicalizeLabel(
   return target.startsWith(":")
     ? `${packageLabel}${target}`
     : `${packageLabel}:${target}`;
-}
-
-/**
- * Get the targets in the build file
- *
- * @param bazelExecutable The path to the Bazel executable.
- * @param workspace The path to the workspace.
- * @param buildFile The path to the build file.
- * @returns A query result for targets in the build file.
- */
-export async function getTargetsForBuildFile(
-  bazelExecutable: string,
-  workspace: string,
-  buildFile: string,
-): Promise<blaze_query.QueryResult> {
-  const pkg = getPackageLabelForBuildFile(workspace, buildFile);
-  const queryResult = await new BazelQuery(
-    bazelExecutable,
-    workspace,
-  ).queryTargets(`kind(rule, ${pkg}:all)`, { sortByRuleName: true });
-
-  return queryResult;
 }
 
 /**
