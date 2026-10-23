@@ -30,7 +30,7 @@ import { LoadContext, insideString, loadContextAt } from "./document_analysis";
  * Completion of labels inside string literals: repository names after `@`,
  * packages after `//`, targets after `:`, files or targets of the current
  * package for bare strings, and `.bzl` files and exported symbols inside
- * `load()`.
+ * `load()`. Fetched external repositories are browsed from their files.
  */
 export class StarlarkCompletionProvider
   implements vscode.CompletionItemProvider
@@ -122,7 +122,22 @@ export class StarlarkCompletionProvider
     // `@repo` — repository names.
     if (prefix.startsWith("@") && !prefix.includes("//")) {
       const repoTyped = prefix.replace(/^@@?/, "");
-      const names = index.getModuleModel()?.repoNames ?? [];
+      // The repository mapping, once loaded, is exact. Until then the
+      // module file and WORKSPACE-style directories under external/ give
+      // a reasonable list without running Bazel.
+      const names = new Set<string>(
+        ctx.resolver.knownRepoNames(ctx.canonicalRepo) ?? [],
+      );
+      if (names.size === 0 && ctx.canonicalRepo === "") {
+        for (const name of index.getModuleModel()?.repoNames ?? []) {
+          names.add(name);
+        }
+        for (const name of await ctx.resolver.listFetchedRepos()) {
+          if (!name.includes("+") && !name.includes("~")) {
+            names.add(name);
+          }
+        }
+      }
       return [...names].sort().map((name) =>
         makeItem(name, vscode.CompletionItemKind.Module, {
           range: rangeBefore(position, repoTyped.length),
@@ -148,13 +163,21 @@ export class StarlarkCompletionProvider
             absolute: true,
           },
           ctx,
+          false,
         );
-        repoView = repo ? indexView(index) : undefined;
+        repoView = repo
+          ? repo.dir === index.root
+            ? indexView(index)
+            : diskView(index, repo.dir)
+          : undefined;
       }
       return repoView ? completeInRepo(repoView, rest, position, bzlOnly) : [];
     }
 
-    const view = indexView(index);
+    const view =
+      ctx.canonicalRepo === ""
+        ? indexView(index)
+        : diskView(index, ctx.repoRoot);
 
     // `:target` — targets of the current package, or `.bzl` files in a load.
     if (prefix.startsWith(":")) {
@@ -203,7 +226,7 @@ export class StarlarkCompletionProvider
   }
 }
 
-/** Packages and targets of one repository. */
+/** Packages and targets of one repository, however they are discovered. */
 interface RepoView {
   /** Directory of a package on disk. */
   dirOf(pkg: string): string;
@@ -233,6 +256,29 @@ function indexView(index: WorkspaceIndex): RepoView {
       return { names: [...names], parentIsPackage };
     },
     targets: (pkg) => index.getTargets(pkg).map((t) => t.name),
+  };
+}
+
+/** A fetched external repository, served from its files. */
+function diskView(index: WorkspaceIndex, repoRoot: string): RepoView {
+  const dirOf = (pkg: string) =>
+    path.join(repoRoot, ...pkg.split("/").filter(Boolean));
+  return {
+    dirOf,
+    children: async (parent) => ({
+      names: (await readDirectory(dirOf(parent)))
+        .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+        .map((e) => e.name),
+      parentIsPackage: !!findBuildFile(dirOf(parent)),
+    }),
+    targets: (pkg) => {
+      const buildFile = findBuildFile(dirOf(pkg));
+      return buildFile
+        ? (index
+            .getForeignBuildModel(buildFile, pkg)
+            ?.targets.map((t) => t.name) ?? [])
+        : [];
+    },
   };
 }
 

@@ -121,6 +121,7 @@ export class StarlarkDefinitionProvider implements vscode.DefinitionProvider {
         const resolved = await this.resolver.resolveLoadModule(
           node.literal.value,
           ctx,
+          true,
         );
         return resolved
           ? [
@@ -136,6 +137,7 @@ export class StarlarkDefinitionProvider implements vscode.DefinitionProvider {
           node.load.module.value,
           node.loadSymbol.original,
           ctx,
+          true,
         );
       }
       const text = node.literal.value;
@@ -148,8 +150,8 @@ export class StarlarkDefinitionProvider implements vscode.DefinitionProvider {
       }
       // Bare strings such as `"foo.cc"` resolve only when they name an
       // existing file or target, so `tags` entries and the like are noise
-      // free.
-      return this.resolver.resolveLabel(label, ctx);
+      // free. Only explicit `@repo//` labels are worth asking Bazel about.
+      return this.resolver.resolveLabel(label, ctx, label.absolute);
     }
 
     // Identifier.
@@ -159,6 +161,7 @@ export class StarlarkDefinitionProvider implements vscode.DefinitionProvider {
         node.load.module.value,
         node.loadSymbol.original,
         ctx,
+        true,
       );
     }
     const bound = loadBinding(analyzed.module, name);
@@ -167,6 +170,7 @@ export class StarlarkDefinitionProvider implements vscode.DefinitionProvider {
         bound.load.module.value,
         bound.symbol.original,
         ctx,
+        true,
       );
     }
     const local = topLevelBinding(analyzed.module, name);
@@ -208,6 +212,6 @@ export async function resolveLabelToLocation(
   if (!label) {
     return undefined;
   }
-  const locations = await resolver.resolveLabel(label, ctx);
+  const locations = await resolver.resolveLabel(label, ctx, true);
   return locations[0];
 }

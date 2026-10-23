@@ -146,6 +146,18 @@ export function getQueryOutputBase(): string | undefined {
   return getRenamedSetting<string>("bazel.commandLine", "queryOutputBase");
 }
 
+/**
+ * Whether to ask Bazel for the main module's repository mapping once after
+ * indexing, so that external labels resolve and fetch without further Bazel
+ * invocations.
+ */
+export function getResolveRepositoriesOnStartup(): boolean {
+  return (
+    getRenamedSetting<boolean>("bazel.index", "resolveRepositoriesOnStartup") ??
+    true
+  );
+}
+
 /** Whether to warn about repository rules without a commit or checksum. */
 export function getUnpinnedRepositoryWarnings(): boolean {
   return (
