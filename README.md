@@ -36,6 +36,18 @@ the editor (and vice versa). Unnamed macro calls, calls whose `name` is
 computed, and syntax errors never break discovery: the affected call is
 skipped and the rest of the file is still indexed.
 
+Bazel is only invoked when you ask for a build, test, run, or debug, when
+picking targets with a query, and for **external repositories**: go to
+definition on `@repo//...` labels opens the fetched copy of the repository
+under Bazel's output base. The repository is located by naming convention
+when possible; otherwise the extension asks Bazel for the repository mapping
+(`bazel mod dump_repo_mapping`) and caches the answer until `MODULE.bazel`
+changes. By default the main module's mapping is loaded once in the
+background after indexing (`bazel.index.resolveRepositoriesOnStartup`), so
+clicks resolve without Bazel afterwards. Repositories that have not been
+fetched yet are offered to be fetched on demand. A module nested in a
+`.bazelignore`d directory is treated as a workspace of its own.
+
 ## Configuring the Extension
 
 This extension adds a **Bazel** section to the extension settings in Visual
