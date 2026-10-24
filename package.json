@@ -33,7 +33,8 @@
         "onCommand:bazel.info.execution_root",
         "onCommand:bazel.info.output_base",
         "onCommand:bazel.info.output_path",
-        "onCommand:bazel.info.workspace"
+        "onCommand:bazel.info.workspace",
+        "onLanguage:bazelrc"
     ],
     "main": "./dist/extension.js",
     "contributes": {
@@ -122,6 +123,11 @@
                 "category": "Bazel",
                 "command": "bazel.showOutputChannel",
                 "title": "Show Output"
+            },
+            {
+                "category": "Bazel",
+                "command": "bazel.bazelrc.refreshFlags",
+                "title": "Refresh .bazelrc flags from Bazel"
             }
         ],
         "configuration": [
@@ -280,6 +286,18 @@
                         "order": 1,
                         "default": true,
                         "markdownDescription": "Whether to show `bazel coverage` results in the built-in Test Explorer view. Deactivate to avoid registering the Bazel Coverage test controller."
+                    }
+                }
+            },
+            {
+                "type": "object",
+                "title": ".bazelrc",
+                "properties": {
+                    "bazel.bazelrc.enable": {
+                        "type": "boolean",
+                        "order": 1,
+                        "default": true,
+                        "markdownDescription": "Completion and hover for `.bazelrc` files: commands, configs, flags, and flag values. The flags of each Bazel LTS line ship with the extension and the one matching the workspace's `.bazelversion` is used; run *Bazel: Refresh .bazelrc flags from Bazel* to add the exact flags of your workspace's Bazel."
                     }
                 }
             },
@@ -709,7 +727,8 @@
         "test": "bazel test //...",
         "package": "bazel run //:export_vsix",
         "update-snapshot": "bazel run //test:update_snapshot",
-        "update-lock": "bazel run //:pnpm -- install --lockfile-only"
+        "update-lock": "bazel run //:pnpm -- install --lockfile-only",
+        "update-bazelrc-flags": "bazel run //:update_bazelrc_flags"
     },
     "devDependencies": {
         "@eslint/js": "^10.0.0",

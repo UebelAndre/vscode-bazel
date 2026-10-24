@@ -1,0 +1,7 @@
+# Fixture rc file for the extension's .bazelrc language tests.
+import %workspace%/tools/shared.bazelrc
+try-import %workspace%/user.bazelrc
+build:ci --keep_going
+test --test_output=errors
+build --config=ci
+build --config=shared

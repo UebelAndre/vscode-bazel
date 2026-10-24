@@ -15,6 +15,7 @@
 import * as vscode from "vscode";
 
 import { BazelWorkspaceInfo, activateTaskProvider } from "../bazel";
+import { BazelrcFeature } from "../bazelrc";
 import { BuildifierFeature } from "../buildifier";
 import { CodeLensFeature } from "../codelens/code_lens_feature";
 import {
@@ -104,6 +105,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // BuildifierFeature
   context.subscriptions.push(await BuildifierFeature.create(context));
+
+  // BazelrcFeature
+  context.subscriptions.push(await BazelrcFeature.create(context));
 
   // LanguageSupportFeature
   context.subscriptions.push(await LanguageSupportFeature.create(context));
