@@ -2,3 +2,5 @@
 src/protos/protos.js
 CHANGELOG.md
 pnpm-lock.yaml
+# Generated flag catalogues (see `bazel run //:update_bazelrc_flags`).
+data/

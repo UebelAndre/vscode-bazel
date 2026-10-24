@@ -135,6 +135,7 @@ We expect contributions to include tests that demonstrate and validate the inten
 
 - Bazel-in-the-loop tests: `bazel test //test:index_integration` (or `npm run test:index-integration`) checks the parsed workspace index against `bazel query`, the macro-generated target overlay, and external repository resolution. They run under plain node with a stub of the VS Code API, so they need no display, only `bazel` (preferably `bazelisk`, so the fixture's `.bazelversion` is honored) and network access for the fixture's first Bazel start.
 - Grammar changes: `bazel run //test:update_snapshot` refreshes `test/example.bazelrc.snap`.
+- `.bazelrc` flag catalogues: `data/bazelrc_flags-<N>.json`, one per Bazel LTS line, are the output of `bazel help flags-as-proto` for each line, resolved through bazelisk. `bazel run //:update_bazelrc_flags` rewrites them all; regenerate when a new LTS line appears or to pick up flags added in point releases.
 
 - New features: add a set of VS Code integration tests that demo the intended behaviour by making use of the mock workspace under `test/bazel_workspace` (vscode-tests will be executed within this workspace). Integration tests should exercise the extension as a user would (for example: open editors, execute commands with `vscode.commands.executeCommand`, and assert on the editor state or extension outputs). See `test/go_to_label.test.ts` for a minimal integration-style example.
 
