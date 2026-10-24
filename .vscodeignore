@@ -6,6 +6,7 @@
 !package.json
 !dist/*.js
 !dist/*.wasm
+!data/*.json
 !icons/**/*.+(svg|license)
 !media/**/*
 !syntaxes/**/*.+(json|license)

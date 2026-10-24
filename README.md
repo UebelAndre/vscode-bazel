@@ -22,6 +22,9 @@ This extension provides support for Bazel in Visual Studio.
 - **Warnings for unpinned repositories**: `git_repository` without a
   `commit`, `http_archive`/`http_file`/`http_jar` without `integrity` or
   `sha256`, and the matching `MODULE.bazel` overrides
+- **`.bazelrc` completion and hover** for commands, configs, flags and their
+  values, from a catalogue of Bazel's flags shipped with the extension
+  (refreshable from your own Bazel with _Bazel: Refresh .bazelrc flags_)
 - **Starlark-aware completion** of the attributes of Starlark-defined rules
   and macros while calling them (with documentation and parameter hints),
   of the fields of `struct`s and providers after a `.`, and of module
