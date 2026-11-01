@@ -53,6 +53,17 @@ const AUGMENTED_OPS = new Set([
 ]);
 
 /**
+ * Prepares the parser for use.
+ *
+ * The current parser is pure TypeScript and needs no setup, but a parser
+ * compiled to WebAssembly would load its module here. Callers await this
+ * once during activation so that `parseModule` can stay synchronous.
+ */
+export function initializeStarlarkParser(): Promise<void> {
+  return Promise.resolve();
+}
+
+/**
  * Parses a Starlark module.
  *
  * Parsing never throws. Syntax errors are recorded in the returned module and

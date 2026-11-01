@@ -12,5 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/**
+ * Public surface of the Starlark parser. The rest of the extension imports
+ * only from here (enforced by ESLint's no-restricted-imports), so that the
+ * parser can be replaced without touching its consumers.
+ */
+
 export * from "./ast";
-export * from "./parser";
+export { initializeStarlarkParser, parseModule } from "./parser";

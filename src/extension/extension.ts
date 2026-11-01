@@ -28,6 +28,7 @@ import { activateWrapperCommands } from "./bazel_wrapper_commands";
 import { registerLogger, logInfo, logError, showOutputChannel } from "./logger";
 import { registerBazelWorkspaceAvailabilityWatcher } from "../bazel/bazel_availability";
 import { LanguageSupportFeature } from "../language_support/language_support_feature";
+import { initializeStarlarkParser } from "../starlark";
 import { logDeprecatedSettingsInUse } from "./settings_migration";
 
 // Global reference to the workspace tree provider for testing
@@ -67,6 +68,10 @@ export async function activate(context: vscode.ExtensionContext) {
   // Settings renamed by #490 are read through aliases; never rewrite
   // settings.json (#706).
   logDeprecatedSettingsInUse();
+
+  // Every feature that reads Starlark parses synchronously; the parser is
+  // prepared once, up front.
+  await initializeStarlarkParser();
 
   // Watch for availability of bazel workspace
   registerBazelWorkspaceAvailabilityWatcher(context);
