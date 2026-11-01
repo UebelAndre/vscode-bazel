@@ -15,9 +15,15 @@
 /**
  * Abstract syntax tree for the Starlark dialect used by Bazel.
  *
+ * This module, together with `parseModule`, is the contract between the
+ * parser and the rest of the extension. Everything else under src/starlark
+ * is an implementation detail: a different parser (for example one compiled
+ * to WebAssembly) only has to produce these plain data structures.
+ *
  * Positions are UTF-16 code unit offsets into the source text, the units
- * `TextDocument.positionAt` expects. Use {@link LineIndex} to convert them
- * to line/column pairs when needed.
+ * `TextDocument.positionAt` expects. A parser that measures in bytes must
+ * convert before handing out nodes. `LineIndex` (src/line_index.ts) turns
+ * offsets into line/column pairs when needed.
  */
 
 /** A half-open range of offsets into the source text. */
@@ -284,49 +290,6 @@ export interface SyntaxError extends Span {
 export interface Module {
   stmts: Stmt[];
   errors: SyntaxError[];
-}
-
-/** Converts between offsets and (line, column) pairs for a source text. */
-export class LineIndex {
-  private readonly lineStarts: number[] = [0];
-
-  constructor(text: string) {
-    for (let i = 0; i < text.length; i++) {
-      if (text.charCodeAt(i) === 10 /* \n */) {
-        this.lineStarts.push(i + 1);
-      }
-    }
-  }
-
-  /** Returns the 0-based line and column for an offset. */
-  public position(offset: number): { line: number; column: number } {
-    let lo = 0;
-    let hi = this.lineStarts.length - 1;
-    while (lo < hi) {
-      const mid = Math.floor((lo + hi + 1) / 2);
-      if (this.lineStarts[mid] <= offset) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    return { line: lo, column: offset - this.lineStarts[lo] };
-  }
-
-  /** Returns the offset of the start of a 0-based line. */
-  public offsetOfLine(line: number): number {
-    if (line < 0) {
-      return 0;
-    }
-    if (line >= this.lineStarts.length) {
-      return this.lineStarts[this.lineStarts.length - 1];
-    }
-    return this.lineStarts[line];
-  }
-
-  public get lineCount(): number {
-    return this.lineStarts.length;
-  }
 }
 
 /** Dotted name of a callee, e.g. `attr.label_list` or `native.filegroup`. */

@@ -158,6 +158,29 @@ module.exports = [
     },
   },
 
+  // The Starlark parser is used only through its public surface
+  // (src/starlark/index.ts), so that it can be replaced without touching
+  // its consumers.
+  {
+    files: ["src/**/*.ts", "test/**/*.ts"],
+    ignores: ["src/starlark/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: "(^|/)starlark/(ast|lexer|parser)$",
+              message:
+                "Import from src/starlark (its public surface), " +
+                "not from the parser's implementation modules.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // Configuration for config files
   {
     // `@eslint/js` is currently missing type information.
