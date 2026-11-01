@@ -87,10 +87,24 @@ filegroup(
     ),
 )
 
+# The fixture workspace as data for plain-mocha tests. It goes through a
+# js_library so rules_js stages the files once; two tests copying the same
+# files to bazel-out would conflict.
+js_library(
+    name = "bazel_workspace_fixture_lib",
+    srcs = [":bazel_workspace_fixture"],
+)
+
 # Coverage reports parsed by lcov_parser.test.ts.
 filegroup(
     name = "lcov_fixtures",
     srcs = glob(["lcov/*.lcov"]),
+)
+
+# Starlark spec corpus parsed by starlark_corpus.test.ts.
+filegroup(
+    name = "starlark_corpus_fixtures",
+    srcs = glob(["starlark_corpus/*.txt"]),
 )
 
 # Package-local tsconfig extends root so rootDir stays inside test/. Named
@@ -102,8 +116,12 @@ ts_config(
 )
 
 # Tests that run under plain mocha instead of inside VS Code (see
-# //test:tool_checksums below).
-_NODE_TESTS = ["tool_checksums_validator.test.ts"]
+# //test:tool_checksums and //test:starlark_parser below).
+_NODE_TESTS = [
+    "starlark_corpus.test.ts",
+    "starlark_parser.test.ts",
+    "tool_checksums_validator.test.ts",
+]
 
 # Compile the test .ts files to JS so vscode-test (mocha) has files to
 # run. The tests' `../src/*` imports resolve against the .d.ts files that
@@ -216,6 +234,23 @@ ts_project(
     deps = [
         "//:node_modules",
         "//:tsc",
+    ],
+)
+
+# The Starlark parser against its unit tests, the spec corpus and the
+# fixture workspace. Pure computation, so it runs under plain mocha.
+mocha_bin.mocha_test(
+    name = "starlark_parser",
+    size = "small",
+    args = [
+        "test/starlark_parser.test.js",
+        "test/starlark_corpus.test.js",
+    ],
+    data = [
+        ":bazel_workspace_fixture_lib",
+        ":node_tests_tsc",
+        ":starlark_corpus_fixtures",
+        "//:node_modules",
     ],
 )
 
