@@ -833,6 +833,20 @@ class Parser {
     let step: Expr | undefined;
     if (!this.isPunct(":")) {
       lo = this.parseTest();
+      if (this.isPunct(",")) {
+        // `a[k1, k2]` indexes with a tuple.
+        const elements = [lo];
+        let end = lo.end;
+        while (this.acceptPunct(",")) {
+          if (this.isPunct("]")) {
+            break;
+          }
+          const e = this.parseTest();
+          elements.push(e);
+          end = e.end;
+        }
+        lo = { kind: "tuple", elements, start: lo.start, end };
+      }
       if (!this.isPunct(":")) {
         const closeIndex = this.expectPunct("]");
         return {
